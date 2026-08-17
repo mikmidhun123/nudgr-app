@@ -1,0 +1,125 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(uid) {
+      return request.auth.uid == uid;
+    }
+
+    // Deterministic document id for a connection between two users.
+    function connectionDocId(uidA, uidB) {
+      return uidA < uidB ? uidA + '_' + uidB : uidB + '_' + uidA;
+    }
+
+    // A signed-in user is "connected to" another uid when their own mirror
+    // subcollection contains that uid. This is what grants profile reads of
+    // connected peers.
+    function connectedTo(uid) {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid)/connections/$(uid));
+    }
+
+    // ---------------------------------------------------------------------
+    // users/{uid} — profile documents keyed by Firebase UID.
+    // Writes are owner-only. Reads are owner-only, plus connected peers.
+    // ---------------------------------------------------------------------
+    match /users/{uid} {
+      allow read: if signedIn() && (isOwner(uid) || connectedTo(uid));
+      allow create: if signedIn() && isOwner(uid)
+        && request.resource.data.uid == uid;
+      allow update: if signedIn() && isOwner(uid)
+        && request.resource.data.uid == uid
+        && request.resource.data.uid == resource.data.uid;
+      allow delete: if false;
+    }
+
+    // ---------------------------------------------------------------------
+    // connectionCodes/{code} — one doc per unique code: { uid, createdAt }.
+    // Any signed-in user may resolve a code to its owner (required for the
+    // connect flow). Only the owner may create/update/delete their code.
+    // ---------------------------------------------------------------------
+    match /connectionCodes/{code} {
+      allow read: if signedIn();
+      allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
+      allow update: if signedIn()
+        && resource.data.uid == request.auth.uid
+        && request.resource.data.uid == request.auth.uid;
+      allow delete: if signedIn() && resource.data.uid == request.auth.uid;
+    }
+
+    // ---------------------------------------------------------------------
+    // connections/{connectionId} — canonical record for a pair of users.
+    // connectionId == connectionDocId(uidA, uidB); users is the sorted pair.
+    // Only members may read/update/delete; creation must include the
+    // authenticated user and match the deterministic id exactly, so a user
+    // cannot create connections between two unrelated people.
+    // ---------------------------------------------------------------------
+    match /connections/{connectionId} {
+      allow read, delete: if signedIn() && resource.data.users.hasAll([request.auth.uid]);
+      allow create: if signedIn()
+        && request.resource.data.users.size() == 2
+        && request.resource.data.users.hasAll([request.auth.uid])
+        && request.resource.data.users[0] < request.resource.data.users[1]
+        && request.resource.data.connectionId == connectionId
+        && connectionId == connectionDocId(request.resource.data.users[0], request.resource.data.users[1]);
+      allow update: if signedIn()
+        && resource.data.users.hasAll([request.auth.uid])
+        && request.resource.data.users == resource.data.users;
+    }
+
+    // ---------------------------------------------------------------------
+    // users/{uid}/connections/{otherUid} — per-user mirror of each
+    // connection, enabling simple per-user queries. Symmetrical permission:
+    // Either party in the connection can create/update the mirror document
+    // when the canonical connection record is created.
+    // ---------------------------------------------------------------------
+    match /users/{uid}/connections/{otherUid} {
+      allow read, delete: if signedIn() && (isOwner(uid) || request.auth.uid == otherUid);
+      allow create, update: if signedIn()
+        && (isOwner(uid) || request.auth.uid == otherUid)
+        && getAfter(/databases/$(database)/documents/connections/$(connectionDocId(uid, otherUid))).data != null;
+    }
+
+    // ---------------------------------------------------------------------
+    // users/{uid}/devices/{deviceId} — per-device FCM/state records.
+    // Owner-only read/write (kept distinct from the fcmTokens map so a user
+    // can register multiple devices).
+    // ---------------------------------------------------------------------
+    match /users/{uid}/devices/{deviceId} {
+      allow read, write: if signedIn() && isOwner(uid);
+    }
+
+    // ---------------------------------------------------------------------
+    // nudges/{nudgeId} — a Nudgr document.
+    // Readable by sender or recipient only. Created by the sender, who must be
+    // the authenticated user and must not target themselves. The sender may
+    // update (status/voice) but cannot change sender/recipient. The recipient
+    // may only mark it completed.
+    // ---------------------------------------------------------------------
+    match /nudges/{nudgeId} {
+      allow read: if signedIn()
+        && (request.auth.uid == resource.data.senderUid
+            || request.auth.uid == resource.data.recipientUid);
+      allow create: if signedIn()
+        && request.resource.data.senderUid == request.auth.uid
+        && request.resource.data.recipientUid != request.auth.uid
+        && request.resource.data.recipientUid is string
+        && request.resource.data.status in ['active', 'scheduled'];
+      allow update: if signedIn() && (
+        // Sender manages their own Nudgr (status, schedule) but identity fields are immutable.
+        (request.auth.uid == resource.data.senderUid
+          && request.resource.data.senderUid == resource.data.senderUid
+          && request.resource.data.recipientUid == resource.data.recipientUid)
+        // Recipient may transition status to triggered or completed; identity stays fixed.
+        || (request.auth.uid == resource.data.recipientUid
+          && request.resource.data.senderUid == resource.data.senderUid
+          && request.resource.data.recipientUid == resource.data.recipientUid
+          && request.resource.data.status in ['triggered', 'completed'])
+      );
+      allow delete: if false;
+    }
+  }
+}

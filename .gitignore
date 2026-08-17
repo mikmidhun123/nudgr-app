@@ -1,0 +1,33 @@
+﻿# Node / Expo
+node_modules/
+.expo/
+dist/
+web-build/
+
+# Android / Gradle
+.gradle/
+**/build/
+local.properties
+
+# IDE
+.idea/
+.vscode/
+*.iml
+
+# Logs / temporary files
+*.log
+tmp/
+tmp_check/
+
+# Secrets / signing keys
+.env
+.env.*
+*.jks
+*.keystore
+*.p12
+*.pem
+*.key
+
+# OS
+.DS_Store
+Thumbs.db

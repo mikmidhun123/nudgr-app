@@ -1,0 +1,12 @@
+# Expo
+.expo/
+.expo-shared/
+node_modules/
+dist/
+build/
+
+# Dependencies
+
+# OS
+.DS_Store
+Thumbs.db

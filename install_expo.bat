@@ -1,0 +1,1 @@
+@"C:\Program Files\nodejs\node.exe" "C:\Program Files\nodejs\npm" install -g expo-cli

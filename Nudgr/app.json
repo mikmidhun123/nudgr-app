@@ -1,0 +1,43 @@
+{
+  "expo": {
+    "name": "Nudgr",
+    "slug": "nudgr",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "scheme": "nudgr",
+    "userInterfaceStyle": "automatic",
+    "jsEngine": "hermes",
+    "plugins": [
+      "@react-native-firebase/app",
+      "@react-native-firebase/auth",
+      "@react-native-firebase/messaging",
+      "expo-location",
+      "expo-asset",
+      "expo-notifications"
+    ],
+    "splash": {
+      "image": "./assets/splash.png",
+      "resizeMode": "contain",
+      "backgroundColor": "#ffffff"
+    },
+    "updates": {
+      "fallbackToCacheTimeout": 0
+    },
+    "assetBundlePatterns": [
+      "**/*"
+    ],
+    "android": {
+      "googleServicesFile": "./android/app/google-services.json",
+      "permissions": [
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_COARSE_LOCATION"
+      ],
+      "package": "com.nudgr",
+      "versionCode": 1
+    },
+    "ios": {
+      "supportsTablet": true
+    }
+  }
+}

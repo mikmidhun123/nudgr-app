@@ -1,0 +1,25 @@
+rules_version = '2';
+
+// Firebase Storage rules for Nudgr voice notes.
+// Voice files live at: voice/{nudgeId}/{fileName}
+// Access is tied to the Nudgr document so only the sender (upload) and the
+// sender/recipient (download) may touch a given file. No public writes.
+service firebase.storage {
+  match /b/{bucket}/o {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function nudgeFor(id) {
+      return firestore.get(/databases/$(database)/documents/nudges/$(id)).data;
+    }
+
+    match /voice/{nudgeId}/{fileName} {
+      allow read: if signedIn()
+        && (request.auth.uid == nudgeFor(nudgeId).senderUid
+            || request.auth.uid == nudgeFor(nudgeId).recipientUid);
+      allow write: if signedIn()
+        && request.auth.uid == nudgeFor(nudgeId).senderUid;
+    }
+  }
+}
