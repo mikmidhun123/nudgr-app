@@ -119,11 +119,14 @@ service cloud.firestore {
         (request.auth.uid == resource.data.senderUid
           && request.resource.data.senderUid == resource.data.senderUid
           && request.resource.data.recipientUid == resource.data.recipientUid)
-        // Recipient may transition status to triggered or completed; identity stays fixed.
+        // Recipient may transition status or toggle enabled/disabled state; identity stays fixed.
         || (request.auth.uid == resource.data.recipientUid
           && request.resource.data.senderUid == resource.data.senderUid
           && request.resource.data.recipientUid == resource.data.recipientUid
-          && request.resource.data.status in ['triggered', 'completed'])
+          && (
+            request.resource.data.status in ['triggered', 'completed']
+            || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enabled', 'disableMode', 'disabledUntil', 'disabledUntilDate', 'status', 'updatedAt'])
+          ))
       );
       allow delete: if false;
     }

@@ -71,24 +71,33 @@ export default function NudgeDetailScreen({ nudgeId, isReceived, autoPlay = fals
     setIsPlaying(false);
   };
 
-  const handleToggle = (newValue) => {
+  const handleToggle = async (newValue) => {
     if (!nudge) return;
     if (!newValue) {
       // User is turning OFF -> Show modal dialog
       setDisableModalVisible(true);
     } else {
       // User is turning ON -> Turn ON immediately
-      setNudgeEnabled(nudge.id, true).then(() => {
+      try {
+        await setNudgeEnabled(nudge.id, true);
         setNudge((prev) => (prev ? { ...prev, enabled: true, disableMode: null } : null));
-      });
+      } catch (e) {
+        console.error('[NUDGE_DETAIL_TOGGLE_ERROR]', e);
+        Alert.alert('Could not update Nudgr', e.message || 'Please try again.');
+      }
     }
   };
 
   const handleConfirmDisable = async (mode) => {
     if (!nudge) return;
     setDisableModalVisible(false);
-    await setNudgeEnabled(nudge.id, false, mode);
-    setNudge((prev) => (prev ? { ...prev, enabled: false, disableMode: mode } : null));
+    try {
+      await setNudgeEnabled(nudge.id, false, mode);
+      setNudge((prev) => (prev ? { ...prev, enabled: false, disableMode: mode } : null));
+    } catch (e) {
+      console.error('[NUDGE_DETAIL_DISABLE_ERROR]', e);
+      Alert.alert('Could not update Nudgr', e.message || 'Please try again.');
+    }
   };
 
   const handleCancelDisable = () => {

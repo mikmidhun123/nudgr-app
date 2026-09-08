@@ -118,7 +118,6 @@ export async function setNudgeEnabled(nudgeId, enabled, disableMode = null) {
       disableMode: null,
       disabledUntil: null,
       disabledUntilDate: null,
-      status: NUDGE_STATUS.ACTIVE,
     });
     console.log(`[NUDGR_DEBUG] Nudgr ${nudgeId} turned ON`);
   } else {

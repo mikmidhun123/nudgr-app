@@ -9,6 +9,7 @@ import {
   Modal,
   ScrollView,
   Platform,
+  Alert,
 } from 'react-native';
 import {
   subscribeSentNudges,
@@ -43,14 +44,19 @@ export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
     };
   }, [uid]);
 
-  const handleToggle = (nudge, newValue) => {
+  const handleToggle = async (nudge, newValue) => {
     if (!newValue) {
       // User is turning OFF an active Nudgr -> Show choice dialog
       setSelectedNudgeForDisable(nudge);
       setDisableModalVisible(true);
     } else {
       // User is turning ON a disabled Nudgr -> Turn ON immediately
-      setNudgeEnabled(nudge.id, true);
+      try {
+        await setNudgeEnabled(nudge.id, true);
+      } catch (e) {
+        console.error('[NUDGE_TOGGLE_ERROR]', e);
+        Alert.alert('Could not update Nudgr', e.message || 'Please try again.');
+      }
     }
   };
 
@@ -59,7 +65,12 @@ export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
     const nudgeId = selectedNudgeForDisable.id;
     setDisableModalVisible(false);
     setSelectedNudgeForDisable(null);
-    await setNudgeEnabled(nudgeId, false, mode);
+    try {
+      await setNudgeEnabled(nudgeId, false, mode);
+    } catch (e) {
+      console.error('[NUDGE_DISABLE_ERROR]', e);
+      Alert.alert('Could not update Nudgr', e.message || 'Please try again.');
+    }
   };
 
   const handleCancelDisable = () => {
