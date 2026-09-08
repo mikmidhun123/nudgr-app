@@ -1,0 +1,11 @@
+name = "nudgr-voice-api"
+main = "index.js"
+compatibility_date = "2024-01-01"
+
+# Cloudflare R2 bucket binding for Nudgr voice notes
+[[r2_buckets]]
+binding = "VOICE_BUCKET"
+bucket_name = "nudgr-voice-notes"
+
+[vars]
+FIREBASE_PROJECT_ID = "nudgr-e6049"
