@@ -139,11 +139,17 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
     <View style={styles.screen}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={onBack} style={styles.backBtn} activeOpacity={0.7}>
+        <View style={styles.headerTitleContainer} pointerEvents="none">
+          <Text style={styles.headerTitle}>Profile</Text>
+        </View>
+        <TouchableOpacity
+          onPress={onBack}
+          style={styles.backBtn}
+          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
           <Text style={styles.backArrow}>‹</Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Profile</Text>
-        <View style={{ width: 40 }} />
       </View>
 
       <ScrollView
@@ -317,33 +323,37 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f4f0',
   },
   header: {
+    height: 52,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: (StatusBar.currentHeight || 0) + 8,
-    paddingBottom: 12,
-    backgroundColor: 'rgba(255,255,255,0.93)',
+    paddingHorizontal: 8,
+    backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(0,0,0,0.07)',
+    zIndex: 10,
   },
-  backBtn: {
-    width: 40,
-    height: 40,
-    alignItems: 'flex-start',
+  headerTitleContainer: {
+    ...StyleSheet.absoluteFillObject,
     justifyContent: 'center',
-  },
-  backArrow: {
-    fontSize: 32,
-    color: '#16a34a',
-    fontWeight: '300',
-    lineHeight: 38,
+    alignItems: 'center',
   },
   headerTitle: {
     fontSize: 18,
     fontWeight: '700',
     color: '#1a1a1a',
     letterSpacing: -0.3,
+  },
+  backBtn: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  backArrow: {
+    fontSize: 32,
+    color: '#16a34a',
+    fontWeight: '300',
+    lineHeight: 34,
   },
   scrollContainer: {
     padding: 16,

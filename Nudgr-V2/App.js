@@ -1,5 +1,5 @@
-import React, { useState, useEffect, useRef } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, ActivityIndicator, PermissionsAndroid, Platform } from 'react-native';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { StyleSheet, Text, View, SafeAreaView, ActivityIndicator, PermissionsAndroid, Platform, BackHandler, StatusBar } from 'react-native';
 import { registerRootComponent } from 'expo';
 import * as Notifications from 'expo-notifications';
 import messaging from '@react-native-firebase/messaging';
@@ -37,8 +37,65 @@ export default function App() {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [ready, setReady] = useState(false);
-  const [screen, setScreen] = useState('home');
-  const [detail, setDetail] = useState(null); // { id, isReceived }
+  const [navStack, setNavStack] = useState([{ name: 'home' }]);
+  const navStackRef = useRef(navStack);
+  const lastNavTimeRef = useRef(0);
+
+  useEffect(() => {
+    navStackRef.current = navStack;
+  }, [navStack]);
+
+  const currentRoute = navStack[navStack.length - 1] || { name: 'home' };
+  const screen = currentRoute.name;
+  const detail = currentRoute.params; // { id, isReceived, autoPlay }
+
+  const navigate = useCallback((name, params = null) => {
+    const now = Date.now();
+    if (now - lastNavTimeRef.current < 250) return; // Prevent rapid double-tap
+    lastNavTimeRef.current = now;
+
+    setNavStack((prev) => {
+      const current = prev[prev.length - 1];
+      if (current && current.name === name) {
+        if (JSON.stringify(current.params || null) === JSON.stringify(params || null)) {
+          return prev; // Already on this screen with same params, do not push duplicate!
+        }
+      }
+      return [...prev, { name, params }];
+    });
+  }, []);
+
+  const goBack = useCallback(() => {
+    setNavStack((prev) => {
+      if (prev.length <= 1) {
+        return prev; // At root, cannot pop
+      }
+      return prev.slice(0, prev.length - 1);
+    });
+  }, []);
+
+  // Handle Android hardware back press
+  useEffect(() => {
+    const onBackPress = () => {
+      // 1. If incoming nudge alert overlay is active, dismiss it
+      if (incomingRef.current) {
+        dismissIncoming();
+        return true;
+      }
+
+      // 2. If navigation stack has more than 1 screen, pop back to previous screen
+      if (navStackRef.current.length > 1) {
+        goBack();
+        return true; // Consumed by App navigation
+      }
+
+      // 3. At root screen ('home') -> return false for normal Android exit behavior
+      return false;
+    };
+
+    const sub = BackHandler.addEventListener('hardwareBackPress', onBackPress);
+    return () => sub.remove();
+  }, [goBack]);
   const [connections, setConnections] = useState([]);
   const [incomingNudgeId, setIncomingNudgeId] = useState(null);
 
@@ -114,8 +171,7 @@ export default function App() {
           dismissIncoming();
         } else {
           dismissIncoming();
-          setDetail({ id: nudgeId, isReceived: true });
-          setScreen('detail');
+          navigate('detail', { id: nudgeId, isReceived: true });
         }
       }
     });
@@ -218,8 +274,7 @@ export default function App() {
       onNudgeOpened: (nudgeId) => {
         console.log('[NOTIFICATION_DEBUG] FCM message opened for nudge:', nudgeId);
         dismissIncoming();
-        setDetail({ id: nudgeId, isReceived: true });
-        setScreen('detail');
+        navigate('detail', { id: nudgeId, isReceived: true });
       },
     });
 
@@ -244,16 +299,14 @@ export default function App() {
       removeFcmToken(currentUserRef.current);
       currentUserRef.current = null;
     }
-    setScreen('home');
-    setDetail(null);
+    setNavStack([{ name: 'home' }]);
     dismissIncoming();
     setConnections([]);
   };
 
   const openIncoming = (nudgeId) => {
     dismissIncoming();
-    setDetail({ id: nudgeId, isReceived: true });
-    setScreen('detail');
+    navigate('detail', { id: nudgeId, isReceived: true });
   };
 
   if (!ready) {
@@ -268,11 +321,6 @@ export default function App() {
     return <AuthScreen />;
   }
 
-  const goHome = () => {
-    setDetail(null);
-    setScreen('home');
-  };
-
   const handleSignOut = async () => {
     try {
       await getAuth().signOut();
@@ -283,15 +331,16 @@ export default function App() {
 
   return (
     <SafeAreaView style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#ffffff" translucent={false} />
       {screen === 'home' && (
         <HomeScreen
           uid={user.uid}
           displayName={profile?.displayName || user.displayName}
           connections={connections}
-          onCreate={() => setScreen('create')}
-          onOpenList={() => setScreen('list')}
-          onOpenProfile={() => setScreen('profile')}
-          onOpenMyConnection={() => setScreen('myconnection')}
+          onCreate={() => navigate('create')}
+          onOpenList={() => navigate('list')}
+          onOpenProfile={() => navigate('profile')}
+          onOpenMyConnection={() => navigate('myconnection')}
         />
       )}
 
@@ -300,7 +349,7 @@ export default function App() {
           uid={user.uid}
           email={user.email}
           displayName={profile?.displayName || user.displayName}
-          onBack={goHome}
+          onBack={goBack}
           onSignOut={handleSignOut}
         />
       )}
@@ -311,17 +360,19 @@ export default function App() {
           email={user.email}
           displayName={profile?.displayName || user.displayName}
           connections={connections}
-          onBack={goHome}
+          onBack={goBack}
         />
       )}
 
       {screen === 'create' && (
         <CreateNudgeScreen
           connections={connections}
-          onBack={goHome}
+          onBack={goBack}
           onCreated={(id) => {
-            setDetail({ id, isReceived: false });
-            setScreen('detail');
+            setNavStack((prev) => {
+              const filtered = prev.filter((r) => r.name !== 'create');
+              return [...filtered, { name: 'detail', params: { id, isReceived: false } }];
+            });
           }}
         />
       )}
@@ -329,10 +380,9 @@ export default function App() {
       {screen === 'list' && (
         <NudgeListScreen
           uid={user.uid}
-          onBack={goHome}
+          onBack={goBack}
           onOpenNudge={(id, isReceived) => {
-            setDetail({ id, isReceived });
-            setScreen('detail');
+            navigate('detail', { id, isReceived });
           }}
         />
       )}
@@ -342,7 +392,7 @@ export default function App() {
           nudgeId={detail.id}
           isReceived={detail.isReceived}
           autoPlay={!!detail.autoPlay}
-          onBack={goHome}
+          onBack={goBack}
         />
       )}
 

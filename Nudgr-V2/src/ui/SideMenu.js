@@ -99,15 +99,15 @@ export function HamburgerButton({ isOpen, onPress }) {
 
 const hamburgerStyles = StyleSheet.create({
   btn: {
-    width: 36,
-    height: 36,
+    width: 44,
+    height: 44,
     justifyContent: 'center',
     alignItems: 'center',
-    gap: 6,
+    gap: 5,
   },
   bar: {
-    width: 22,
-    height: 2.5,
+    width: 20,
+    height: 2.2,
     borderRadius: 2,
     backgroundColor: '#1a1a1a',
   },
@@ -136,14 +136,12 @@ export default function SideMenu({ isOpen, onClose, onNavigate }) {
     ]).start();
   }, [isOpen]);
 
-  // Android back button closes the drawer first
+  // Android back button closes the drawer first when open
   useEffect(() => {
+    if (!isOpen) return;
     const handler = BackHandler.addEventListener('hardwareBackPress', () => {
-      if (isOpen) {
-        onClose();
-        return true; // consumed
-      }
-      return false;
+      onClose();
+      return true; // consumed
     });
     return () => handler.remove();
   }, [isOpen, onClose]);

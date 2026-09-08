@@ -32,13 +32,13 @@ export default function HomeScreen({
     <View style={styles.screen}>
       {/* App Header */}
       <View style={styles.header}>
+        <View style={styles.headerTitleContainer} pointerEvents="none">
+          <Text style={styles.headerTitle}>Nudgr</Text>
+        </View>
         <HamburgerButton
           isOpen={menuOpen}
           onPress={() => setMenuOpen((v) => !v)}
         />
-        <Text style={styles.headerTitle}>Nudgr</Text>
-        {/* Spacer keeps title centred */}
-        <View style={{ width: 36 }} />
       </View>
 
       {/* Main Content */}
@@ -150,22 +150,25 @@ const styles = StyleSheet.create({
     backgroundColor: '#f0f4f0',
   },
   header: {
+    height: 52,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: 16,
-    paddingTop: (StatusBar.currentHeight || 0) + 8,
-    paddingBottom: 12,
-    backgroundColor: 'rgba(255,255,255,0.93)',
+    paddingHorizontal: 8,
+    backgroundColor: '#ffffff',
     borderBottomWidth: 1,
     borderBottomColor: 'rgba(0,0,0,0.07)',
-    zIndex: 1,
+    zIndex: 10,
+  },
+  headerTitleContainer: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 20,
-    fontWeight: '900',
+    fontSize: 19,
+    fontWeight: '800',
     color: '#1a1a1a',
-    letterSpacing: -0.8,
+    letterSpacing: -0.5,
   },
   scrollContainer: {
     padding: 16,

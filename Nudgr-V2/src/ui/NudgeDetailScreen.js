@@ -127,8 +127,25 @@ export default function NudgeDetailScreen({ nudgeId, isReceived, autoPlay = fals
     : VOICE_STYLES[nudge.voiceStyle]?.label || 'Normal';
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 36 }}>
-      <Text style={styles.heading}>Nudgr Details</Text>
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <View style={styles.headerTitleContainer} pointerEvents="none">
+          <Text style={styles.headerTitle}>Nudgr Details</Text>
+        </View>
+        <TouchableOpacity
+          onPress={async () => {
+            await stopNudgeMessage();
+            onBack();
+          }}
+          style={styles.backBtn}
+          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Text style={styles.backArrow}>‹</Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 36 }}>
 
       {/* Primary ON / OFF Switch Card */}
       <View style={[styles.switchCard, !isActive && styles.switchCardDisabled]}>
@@ -253,7 +270,7 @@ export default function NudgeDetailScreen({ nudgeId, isReceived, autoPlay = fals
 
       <View style={{ marginTop: 12 }}>
         <Button
-          title="← Back to Nudgrs"
+          title="← Back"
           onPress={async () => {
             await stopNudgeMessage();
             onBack();
@@ -320,10 +337,48 @@ export default function NudgeDetailScreen({ nudgeId, isReceived, autoPlay = fals
         </View>
       </Modal>
     </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  header: {
+    height: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.07)',
+    zIndex: 10,
+  },
+  headerTitleContainer: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1a1a1a',
+    letterSpacing: -0.3,
+  },
+  backBtn: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  backArrow: {
+    fontSize: 32,
+    color: '#16a34a',
+    fontWeight: '300',
+    lineHeight: 34,
+  },
   container: { flex: 1, padding: 16, backgroundColor: '#f8fafc' },
   heading: { fontSize: 24, fontWeight: '800', color: '#0f172a', marginBottom: 12 },
   switchCard: {

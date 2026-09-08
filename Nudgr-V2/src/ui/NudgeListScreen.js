@@ -125,38 +125,53 @@ export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
   };
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.heading}>My Nudgrs</Text>
-      <Text style={styles.subheading}>
-        Manage your active reminders and arrival alarms. Toggle the switch to turn ON or OFF.
-      </Text>
-
-      {loading && <ActivityIndicator size="large" color="#2e7d32" style={{ marginVertical: 16 }} />}
-
-      <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-        {received.length > 0 && (
-          <>
-            <Text style={styles.sectionTitle}>📥 Received Nudgrs</Text>
-            {received.map((n) => renderNudge(n, true))}
-          </>
-        )}
-
-        <Text style={styles.sectionTitle}>📤 Sent Nudgrs</Text>
-        {sent.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <Text style={styles.emptyText}>No Nudgrs sent yet.</Text>
-            <Text style={styles.emptySubtext}>Create a Nudgr from the Home Screen to get started.</Text>
-          </View>
-        ) : (
-          sent.map((n) => renderNudge(n, false))
-        )}
-
-        <View style={{ marginTop: 20, marginBottom: 30 }}>
-          <TouchableOpacity style={styles.backButton} onPress={onBack} activeOpacity={0.8}>
-            <Text style={styles.backButtonText}>← Back to Home</Text>
-          </TouchableOpacity>
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <View style={styles.headerTitleContainer} pointerEvents="none">
+          <Text style={styles.headerTitle}>My Nudgrs</Text>
         </View>
-      </ScrollView>
+        <TouchableOpacity
+          onPress={onBack}
+          style={styles.backBtn}
+          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Text style={styles.backArrow}>‹</Text>
+        </TouchableOpacity>
+      </View>
+
+      <View style={styles.container}>
+        <Text style={styles.subheading}>
+          Manage your active reminders and arrival alarms. Toggle the switch to turn ON or OFF.
+        </Text>
+
+        {loading && <ActivityIndicator size="large" color="#2e7d32" style={{ marginVertical: 16 }} />}
+
+        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
+          {received.length > 0 && (
+            <>
+              <Text style={styles.sectionTitle}>📥 Received Nudgrs</Text>
+              {received.map((n) => renderNudge(n, true))}
+            </>
+          )}
+
+          <Text style={styles.sectionTitle}>📤 Sent Nudgrs</Text>
+          {sent.length === 0 ? (
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyText}>No Nudgrs sent yet.</Text>
+              <Text style={styles.emptySubtext}>Create a Nudgr from the Home Screen to get started.</Text>
+            </View>
+          ) : (
+            sent.map((n) => renderNudge(n, false))
+          )}
+
+          <View style={{ marginTop: 20, marginBottom: 30 }}>
+            <TouchableOpacity style={styles.backButton} onPress={onBack} activeOpacity={0.8}>
+              <Text style={styles.backButtonText}>← Back</Text>
+            </TouchableOpacity>
+          </View>
+        </ScrollView>
+      </View>
 
       {/* -------------------------------------------------------- */}
       {/* TURN OFF NUDGR CHOICE MODAL */}
@@ -221,6 +236,43 @@ export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  header: {
+    height: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.07)',
+    zIndex: 10,
+  },
+  headerTitleContainer: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1a1a1a',
+    letterSpacing: -0.3,
+  },
+  backBtn: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  backArrow: {
+    fontSize: 32,
+    color: '#16a34a',
+    fontWeight: '300',
+    lineHeight: 34,
+  },
   container: {
     flex: 1,
     padding: 16,

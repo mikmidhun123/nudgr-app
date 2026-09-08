@@ -363,8 +363,22 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
   };
 
   return (
-    <ScrollView style={styles.container}>
-      <Text style={styles.heading}>Create Nudgr</Text>
+    <View style={styles.screen}>
+      <View style={styles.header}>
+        <View style={styles.headerTitleContainer} pointerEvents="none">
+          <Text style={styles.headerTitle}>Create Nudgr</Text>
+        </View>
+        <TouchableOpacity
+          onPress={onBack}
+          style={styles.backBtn}
+          activeOpacity={0.7}
+          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+        >
+          <Text style={styles.backArrow}>‹</Text>
+        </TouchableOpacity>
+      </View>
+
+      <ScrollView style={styles.container}>
 
       {/* 🧪 Pure Time Trigger Test Card (No GPS, No Geofence, No Peer Required) */}
       <View style={styles.timeTestCard}>
@@ -605,10 +619,48 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
         <Button title="Back" onPress={onBack} />
       </View>
     </ScrollView>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screen: {
+    flex: 1,
+    backgroundColor: '#f8fafc',
+  },
+  header: {
+    height: 52,
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    backgroundColor: '#ffffff',
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.07)',
+    zIndex: 10,
+  },
+  headerTitleContainer: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  headerTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: '#1a1a1a',
+    letterSpacing: -0.3,
+  },
+  backBtn: {
+    width: 44,
+    height: 44,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  backArrow: {
+    fontSize: 32,
+    color: '#16a34a',
+    fontWeight: '300',
+    lineHeight: 34,
+  },
   container: { padding: 16 },
   heading: { fontSize: 22, fontWeight: 'bold', marginBottom: 12 },
   label: { fontSize: 14, fontWeight: '600', color: '#555', marginTop: 12, marginBottom: 6 },
