@@ -3,6 +3,7 @@ import { StyleSheet, Text, View, SafeAreaView, ActivityIndicator, PermissionsAnd
 import { registerRootComponent } from 'expo';
 import * as Notifications from 'expo-notifications';
 import messaging from '@react-native-firebase/messaging';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { attachFirebaseFoundation, getAuth, getMessaging } from './src/firebase';
 import './src/location/backgroundGeofence'; // registers the background task at load
 import {
@@ -107,6 +108,7 @@ export default function App() {
   const refreshAttachedRef = useRef(false);
   const incomingRef = useRef(null);
   const currentUserRef = useRef(null);
+  const handledTriggeredNudgesRef = useRef(new Set());
 
   const showIncoming = (id, startAnswered = false) => {
     const nudgeId = typeof id === 'object' ? id.id : id;
@@ -214,6 +216,7 @@ export default function App() {
       if (firebaseUser) {
         currentUserRef.current = firebaseUser;
         setUser(firebaseUser);
+        AsyncStorage.setItem('nudgr_active_uid', firebaseUser.uid).catch(() => {});
         try {
           const p = await ensureUserProfile(firebaseUser);
           setProfile(p);
@@ -248,15 +251,35 @@ export default function App() {
 
     // Recipient-side listening for triggered Nudgrs in foreground.
     stopRecvRef.current = subscribeReceivedNudges(uid, (list) => {
-      const triggered = list.find((n) => n.status === NUDGE_STATUS.TRIGGERED);
-      if (triggered) {
-        console.log('[NOTIFICATION_DEBUG] Triggered Nudgr found in Firestore subscription:', triggered.id);
+      console.log(`[RECIPIENT_DIAG]\nrecipient listener initialized\nNudgr event detected: ${list.length} received nudges`);
+      const triggeredList = list.filter((n) => n.status === NUDGE_STATUS.TRIGGERED);
+      console.log(`[RECIPIENT_DIAG] Triggered count in snapshot: ${triggeredList.length}`);
+
+      for (const triggered of triggeredList) {
+        if (handledTriggeredNudgesRef.current.has(triggered.id)) {
+          continue; // Already dispatched notification for this triggered nudge
+        }
+        handledTriggeredNudgesRef.current.add(triggered.id);
+
+        console.log(`[RECIPIENT_DIAG]\nrecipient event detected\nNudgr ID = ${triggered.id}\nsender = ${triggered.senderName || triggered.senderUid}\nmessage = ${triggered.message}\nevent timestamp = ${triggered.triggeredAt?.toMillis?.() || Date.now()}`);
+
+        console.log(`[DELIVERY_TRACE] recipient listener/message\n→ recipient UID: ${uid}\n→ triggered Nudgr received: ${triggered.id}\n→ recipient handler: showIncoming(${triggered.id})\n→ notification function: showIncomingNudgeNotification called`);
+
         showIncoming(triggered.id);
+
+        console.log(`[NOTIFICATION_FLOW_DIAG]\nrecipient event received\nnotification dispatch called\nnotification ID = pending\ndispatch result = calling showIncomingNudgeNotification\nerror if any = NONE`);
+
         showIncomingNudgeNotification({
           nudgeId: triggered.id,
           senderName: triggered.senderName || 'Someone',
           message: triggered.message || 'Incoming Nudgr',
-        }).catch((e) => console.error('[NOTIFICATION_DEBUG] Error displaying triggered notification:', e));
+        })
+          .then((notifId) => {
+            console.log(`[NOTIFICATION_FLOW_DIAG]\nrecipient event received\nnotification dispatch called\nnotification ID = ${notifId}\ndispatch result = SUCCESS\nerror if any = NONE`);
+          })
+          .catch((e) => {
+            console.error(`[NOTIFICATION_FLOW_DIAG]\nrecipient event received\nnotification dispatch called\nnotification ID = NONE\ndispatch result = FAILED\nerror if any = ${e.message}`);
+          });
       }
     });
 
@@ -295,6 +318,8 @@ export default function App() {
     stopConnRef.current = null;
     stopRecvRef.current = null;
     stopSentAlarmSyncRef.current = null;
+    handledTriggeredNudgesRef.current.clear();
+    AsyncStorage.removeItem('nudgr_active_uid').catch(() => {});
     if (currentUserRef.current) {
       removeFcmToken(currentUserRef.current);
       currentUserRef.current = null;

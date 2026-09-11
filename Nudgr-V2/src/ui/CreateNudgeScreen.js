@@ -257,6 +257,7 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
     }
 
     const peer = connections.find((c) => c.otherUid === recipientUid);
+    console.log(`[NUDGR_DIAG] Submitting Nudgr to recipient ${recipientUid}, center: (${trigger.latitude}, ${trigger.longitude}), radius: ${radiusKm}km`);
     const created = await createNudge({
       recipientUid,
       recipientName: peer?.profile?.displayName || peer?.profile?.email || null,

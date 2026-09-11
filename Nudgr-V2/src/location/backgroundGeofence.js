@@ -6,44 +6,61 @@ import {
   updateNudge,
   isNudgeActive,
 } from '../db/nudges';
-import { scheduleAllows, isWithinRadius, isCooldownActive } from './triggerEngine';
+import {
+  calculateDistanceMeters,
+  scheduleAllows,
+  isWithinRadius,
+  isCooldownActive,
+} from './geoUtils';
 import { createTriggerEvent } from '../db/triggers';
+
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const GEOFENCE_TASK = 'NUDGR_GEOFENCE_ENTER';
 
 /**
  * Evaluates the SENDER'S active Nudgrs against current GPS coords.
- * This runs inside the background geofence task when an enter event fires.
- * The sender is the person who created the Nudgr and whose movement triggers it.
+ * This runs inside the background geofence task when an enter event fires,
+ * or from the foreground position watcher, or initial startup check.
  */
-async function evaluateSenderNudges(coords) {
+export async function evaluateSenderNudges(coords, triggeredRegionId = null) {
   if (!coords || typeof coords.latitude !== 'number' || typeof coords.longitude !== 'number') {
-    console.log('[GEOFENCE_DEBUG] evaluateSenderNudges called with invalid coordinates:', coords);
-    return;
-  }
-  const uid = getAuth().currentUser?.uid;
-  if (!uid) {
-    console.log('[GEOFENCE_DEBUG] evaluateSenderNudges: No authenticated user');
+    console.log('[LOCATION_DIAG] evaluateSenderNudges called with invalid coordinates:', coords);
     return;
   }
 
-  console.log('[GEOFENCE_DEBUG] Evaluating active Nudgrs at lat:', coords.latitude, 'lon:', coords.longitude, 'for user:', uid);
+  let uid = getAuth().currentUser?.uid;
+  if (!uid) {
+    try {
+      uid = await AsyncStorage.getItem('nudgr_active_uid');
+    } catch (_) {}
+  }
+  if (!uid) {
+    console.log('[GEOFENCE_DEBUG] evaluateSenderNudges: No authenticated user ID available');
+    return;
+  }
+
+  console.log(`[LOCATION_DIAG]\nlocation update received\nlatitude = ${coords.latitude}\nlongitude = ${coords.longitude}\naccuracy = ${coords.accuracy ?? 'unknown'}\ntimestamp = ${coords.timestamp || Date.now()}`);
 
   try {
     const snap = await getFirestore()
       .collection('nudges')
       .where('senderUid', '==', uid)
-      .where('status', 'in', [NUDGE_STATUS.ACTIVE, NUDGE_STATUS.SCHEDULED])
       .get();
 
-    console.log('[GEOFENCE_DEBUG] Found', snap.docs.length, 'active/scheduled nudges for evaluation');
+    const activeDocs = snap.docs.filter((doc) => {
+      const data = doc.data();
+      return data.status === NUDGE_STATUS.ACTIVE || data.status === NUDGE_STATUS.SCHEDULED;
+    });
 
-    for (const doc of snap.docs) {
+    console.log(`[NUDGR_DIAG] Found ${activeDocs.length} active/scheduled nudges for evaluation out of ${snap.docs.length} total`);
+
+    for (const doc of activeDocs) {
       const nudge = { id: doc.id, ...doc.data() };
 
       // Check if Nudgr is enabled/active by user
       if (!isNudgeActive(nudge)) {
-        console.log('[GEOFENCE_DEBUG] Nudge is disabled/paused, skipping:', nudge.id);
+        console.log(`[NUDGR_DIAG] Nudge ${nudge.id} is disabled/paused, skipping`);
         continue;
       }
 
@@ -52,9 +69,9 @@ async function evaluateSenderNudges(coords) {
         try {
           await updateNudge(nudge.id, { status: NUDGE_STATUS.ACTIVE });
           nudge.status = NUDGE_STATUS.ACTIVE;
-          console.log('[GEOFENCE_DEBUG] Nudge transitioned from SCHEDULED to ACTIVE:', nudge.id);
+          console.log(`[NUDGR_DIAG] Nudge ${nudge.id} transitioned from SCHEDULED to ACTIVE`);
         } catch (e) {
-          console.warn('[GEOFENCE_DEBUG] Error updating scheduled nudge:', e.message);
+          console.warn('[NUDGR_DIAG] Error updating scheduled nudge:', e.message);
         }
       }
 
@@ -62,24 +79,41 @@ async function evaluateSenderNudges(coords) {
 
       // 30-minute cooldown check
       if (isCooldownActive(nudge)) {
-        console.log('[GEOFENCE_DEBUG] Cooldown is currently active for nudge:', nudge.id);
+        console.log(`[TRIGGER_DIAG]\nNudgr ID = ${nudge.id}\ncondition evaluated = cooldown check\nresult = COOLDOWN_ACTIVE\ntrigger function called = NO`);
         continue;
       }
 
-      // User-configured radius: radiusKm * 1000 meters.
-      if (isWithinRadius(nudge, coords)) {
-        console.log('[GEOFENCE_DEBUG] Location is WITHIN radius for nudge:', nudge.id, 'Message:', nudge.message);
+      const distance = calculateDistanceMeters(
+        coords.latitude,
+        coords.longitude,
+        nudge.triggerLatitude,
+        nudge.triggerLongitude
+      );
+      const configuredRadiusMeters = nudge.radiusKm * 1000;
+      const isMatchingRegion = triggeredRegionId && (triggeredRegionId === `nudgr-${nudge.id}` || triggeredRegionId === nudge.id);
+      const tolerance = isMatchingRegion ? Math.max(coords.accuracy || 0, 150) : Math.max(coords.accuracy || 0, 50);
+      const inside = distance <= (configuredRadiusMeters + tolerance);
 
-        // Create idempotent trigger event (server-side validation happens in Cloud Function)
-        const result = await createTriggerEvent(nudge.id, {
-          recipientUid: nudge.recipientUid,
-          triggerLatitude: coords.latitude,
-          triggerLongitude: coords.longitude,
-          triggeredAt: getServerTimestamp(),
-        });
-        console.log('[GEOFENCE_DEBUG] Trigger event created:', JSON.stringify(result));
-      } else {
-        console.log('[GEOFENCE_DEBUG] Nudge', nudge.id, 'is outside configured radius');
+      console.log(`[REAL_LOCATION]\nNudgr=${nudge.id}\ndistance=${Math.round(distance)}m\nradius=${configuredRadiusMeters}m\nstate=${inside ? 'INSIDE' : 'OUTSIDE'}`);
+
+      console.log(`[RADIUS_DIAG]\nNudgr ID = ${nudge.id}\nconfigured center = lat ${nudge.triggerLatitude}, lon ${nudge.triggerLongitude}\ncurrent location = lat ${coords.latitude}, lon ${coords.longitude}\nconfigured radius = ${nudge.radiusKm} km (${configuredRadiusMeters} m)\ncalculated distance = ${Math.round(distance)} m\ninside/outside = ${inside ? 'INSIDE' : 'OUTSIDE'}`);
+
+      console.log(`[TRIGGER_DIAG]\nNudgr ID = ${nudge.id}\ncondition evaluated = distance (${Math.round(distance)}m) <= radius (${configuredRadiusMeters}m + tol ${Math.round(tolerance)}m)\nresult = ${inside ? 'TRUE' : 'FALSE'}\ntrigger function called = ${inside ? 'YES' : 'NO'}`);
+
+      if (inside) {
+        console.log(`[NUDGR_TRIGGER]\nNudgr ID=${nudge.id}\nsender=${nudge.senderUid}\nrecipient=${nudge.recipientUid}\ntrigger type=LOCATION\nprevious state=${nudge.status}\nnew state=triggered\ntrigger timestamp=${new Date().toISOString()}`);
+        try {
+          const result = await createTriggerEvent(nudge.id, {
+            senderUid: uid,
+            recipientUid: nudge.recipientUid,
+            triggerLatitude: coords.latitude,
+            triggerLongitude: coords.longitude,
+            triggeredAt: getServerTimestamp(),
+          });
+          console.log(`[TRIGGER_DIAG] Trigger event created successfully for nudge ${nudge.id}:`, JSON.stringify(result));
+        } catch (err) {
+          console.error(`[TRIGGER_DIAG] Error creating trigger event for nudge ${nudge.id}:`, err.message);
+        }
       }
     }
   } catch (e) {
@@ -90,32 +124,67 @@ async function evaluateSenderNudges(coords) {
 // Define the background geofence task at module scope (required by expo-task-manager)
 TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
   if (error) {
-    console.error('[GEOFENCE_DEBUG] Background task error:', error.message);
+    console.error('[LOCATION_DIAG] Background geofence task error:', error.message);
     return;
   }
-  console.log('[GEOFENCE_DEBUG] Background geofence task triggered! Event type:', data?.eventType);
+  console.log('[LOCATION_DIAG] Background geofence task triggered! Event type:', data?.eventType);
 
-  // Geofence events contain an array of region events
-  const events = data?.eventType === Location.GeofencingEventType.Enter
-    ? data.regions?.map(r => r.identifier).filter(Boolean)
-    : [];
-  
-  if (events.length === 0) {
-    console.log('[GEOFENCE_DEBUG] No enter regions found in event');
+  // Expo Location sends data: { eventType, region: { identifier, latitude, longitude, radius } }
+  // Support both data.region (singular, standard Expo) and data.regions (array fallback)
+  const region = data?.region;
+  const regions = data?.regions || (region ? [region] : []);
+
+  const isEnter = data?.eventType === Location.GeofencingEventType.Enter;
+  const enterRegions = isEnter ? regions.filter(Boolean) : [];
+
+  if (enterRegions.length === 0) {
+    console.log('[LOCATION_DIAG] No enter regions found in event. Raw data:', JSON.stringify(data));
     return;
   }
 
-  console.log('[GEOFENCE_DEBUG] Geofence enter event received for regions:', events.join(', '));
+  const identifiers = enterRegions.map((r) => r.identifier).filter(Boolean);
+  console.log('[LOCATION_DIAG] Geofence enter event received for regions:', identifiers.join(', '));
 
-  try {
-    // Get current location to pass to evaluator
-    const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
-    if (loc?.coords) {
-      console.log('[GEOFENCE_DEBUG] Current GPS acquired:', loc.coords.latitude, loc.coords.longitude);
-      await evaluateSenderNudges(loc.coords);
+  for (const reg of enterRegions) {
+    let coords = null;
+
+    // 1. Try to acquire high-accuracy GPS position
+    try {
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      if (loc?.coords) {
+        coords = loc.coords;
+        console.log(`[LOCATION_DIAG]\nlocation update received (current GPS)\nlatitude = ${coords.latitude}\nlongitude = ${coords.longitude}\naccuracy = ${coords.accuracy}\ntimestamp = ${loc.timestamp || Date.now()}`);
+      }
+    } catch (e) {
+      console.warn('[LOCATION_DIAG] getCurrentPositionAsync timed out or unavailable in background:', e.message);
+      // 2. Fallback to cached last known position
+      try {
+        const lastLoc = await Location.getLastKnownPositionAsync();
+        if (lastLoc?.coords) {
+          coords = lastLoc.coords;
+          console.log(`[LOCATION_DIAG]\nlocation update received (last known GPS)\nlatitude = ${coords.latitude}\nlongitude = ${coords.longitude}\naccuracy = ${coords.accuracy}\ntimestamp = ${lastLoc.timestamp || Date.now()}`);
+        }
+      } catch (_) {}
     }
-  } catch (e) {
-    console.error('[GEOFENCE_DEBUG] Error getting position in geofence task:', e.message);
+
+    // 3. If GPS is unavailable in background, fallback to the entered region coordinates (hardware-verified)
+    if (!coords && typeof reg.latitude === 'number' && typeof reg.longitude === 'number') {
+      coords = {
+        latitude: reg.latitude,
+        longitude: reg.longitude,
+        accuracy: reg.radius || 100,
+        timestamp: Date.now(),
+      };
+      console.log(`[LOCATION_DIAG]\nlocation update received (geofence trigger coordinates)\nlatitude = ${coords.latitude}\nlongitude = ${coords.longitude}\naccuracy = ${coords.accuracy}\ntimestamp = ${coords.timestamp}`);
+    }
+
+    if (coords) {
+      const transition = isEnter ? 'ENTER' : 'EXIT';
+      console.log(`[REAL_LOCATION]\ntimestamp=${new Date().toISOString()}\nlatitude=${coords.latitude}\nlongitude=${coords.longitude}\naccuracy=${coords.accuracy}\nevent=OS_GEOFENCE_TRANSITION\nregionId=${reg.identifier}\ntransition=${transition}`);
+      await evaluateSenderNudges(coords, reg.identifier);
+    } else {
+      console.error('[LOCATION_DIAG] Unable to obtain coordinates for geofence evaluation');
+    }
   }
 });
 
@@ -191,9 +260,20 @@ export async function registerGeofencesForNudges(nudges) {
     await Location.startGeofencingAsync(GEOFENCE_TASK, regions);
     
     console.log('[GEOFENCE_DEBUG] Successfully registered', regions.length, 'OS geofences:', regions.map(r => r.identifier).join(', '));
+    for (const n of nudges) {
+      console.log(`[REAL_GEOFENCE]\nNudgr=${n.id}\ngeofence ID=nudgr-${n.id}\ncenter=lat ${n.triggerLatitude}, lon ${n.triggerLongitude}\nradius=${n.radiusKm * 1000}m\ntransitions=ENTER\nregistration=SUCCESS`);
+    }
+
+    // Verify registration with Android OS
+    const verified = await getRegisteredGeofences();
+    console.log(`[REAL_GEOFENCE]\nverifiedWithAndroidOS=${verified.isStarted ? 'YES' : 'NO'}\nactiveTaskRegistered=${verified.isRegistered ? 'YES' : 'NO'}\nregisteredRegionsCount=${verified.regions.length}`);
+
     return { success: regions.length, failed: 0 };
   } catch (e) {
     console.error('[GEOFENCE_DEBUG] Failed to startGeofencingAsync:', e.message);
+    for (const n of nudges) {
+      console.error(`[REAL_GEOFENCE]\nNudgr=${n.id}\ngeofence ID=nudgr-${n.id}\ncenter=lat ${n.triggerLatitude}, lon ${n.triggerLongitude}\nradius=${n.radiusKm * 1000}m\ntransitions=ENTER\nregistration=FAILED\nregistration error=${e.message}`);
+    }
     return { success: 0, failed: regions.length, reason: e.message };
   }
 }
@@ -229,14 +309,29 @@ export async function areGeofencesActive() {
 }
 
 /**
- * Gets the currently registered geofence identifiers (for debugging).
+ * Gets the currently registered geofence configuration from Android OS (for verification).
  */
 export async function getRegisteredGeofences() {
   try {
-    // Expo Location doesn't expose a direct API to list active geofences
-    // This would need native module access; returning empty for now
-    return [];
+    const isRegistered = await TaskManager.isTaskRegisteredAsync(GEOFENCE_TASK);
+    let isStarted = false;
+    try {
+      isStarted = await Location.hasStartedGeofencingAsync(GEOFENCE_TASK);
+    } catch (_) {}
+
+    let regions = [];
+    try {
+      const tasks = await TaskManager.getRegisteredTasksAsync();
+      const geofenceTask = tasks.find((t) => t.taskName === GEOFENCE_TASK);
+      regions = geofenceTask?.options?.regions || [];
+    } catch (_) {}
+
+    return {
+      isRegistered,
+      isStarted,
+      regions,
+    };
   } catch (e) {
-    return [];
+    return { isRegistered: false, isStarted: false, regions: [], error: e.message };
   }
 }

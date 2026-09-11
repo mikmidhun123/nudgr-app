@@ -44,7 +44,13 @@ export const TRIGGER_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
  * @returns {Promise<{id: string, created: boolean, cooldown?: boolean}>}
  */
 export async function createTriggerEvent(nudgeId, params = {}) {
-  const currentUid = getAuth().currentUser?.uid;
+  let currentUid = params.senderUid || getAuth().currentUser?.uid;
+  if (!currentUid) {
+    try {
+      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
+      currentUid = await AsyncStorage.getItem('nudgr_active_uid');
+    } catch (_) {}
+  }
   if (!currentUid) {
     throw new Error('You must be signed in to create a trigger event.');
   }
@@ -60,59 +66,70 @@ export async function createTriggerEvent(nudgeId, params = {}) {
   let created = false;
   let cooldownActive = false;
 
-  await db.runTransaction(async (transaction) => {
-    // 1. Check parent Nudgr document for cooldown
-    const nudgeDoc = await transaction.get(nudgeRef);
-    if (!nudgeDoc.exists) {
-      created = false;
-      return;
-    }
+  console.log(`[FIREBASE_DIAG]\ntrigger event received\nwrite/read/listener started\ndocument/path being accessed = nudges/${nudgeId}/triggerEvents/${triggerEventId} & nudges/${nudgeId}`);
 
-    const nudgeData = nudgeDoc.data();
-    const lastTrigger =
-      nudgeData.lastTriggeredAt?.toMillis?.() ||
-      (typeof nudgeData.lastTriggeredAt === 'number' ? nudgeData.lastTriggeredAt : null) ||
-      nudgeData.triggeredAt?.toMillis?.() ||
-      (typeof nudgeData.triggeredAt === 'number' ? nudgeData.triggeredAt : null);
+  try {
+    await db.runTransaction(async (transaction) => {
+      // 1. Check parent Nudgr document for cooldown
+      const nudgeDoc = await transaction.get(nudgeRef);
+      if (!nudgeDoc.exists) {
+        created = false;
+        return;
+      }
 
-    if (lastTrigger && enterTime - lastTrigger < TRIGGER_COOLDOWN_MS) {
-      cooldownActive = true;
-      created = false;
-      return;
-    }
+      const nudgeData = nudgeDoc.data();
+      const lastTrigger =
+        nudgeData.lastTriggeredAt?.toMillis?.() ||
+        (typeof nudgeData.lastTriggeredAt === 'number' ? nudgeData.lastTriggeredAt : null) ||
+        nudgeData.triggeredAt?.toMillis?.() ||
+        (typeof nudgeData.triggeredAt === 'number' ? nudgeData.triggeredAt : null);
 
-    // 2. Check if this exact trigger event ID already exists
-    const existingDoc = await transaction.get(ref);
-    if (existingDoc.exists) {
-      created = false;
-      return;
-    }
+      if (lastTrigger && enterTime - lastTrigger < TRIGGER_COOLDOWN_MS) {
+        cooldownActive = true;
+        created = false;
+        return;
+      }
 
-    const triggerData = {
-      nudgeId,
-      triggerEventId,
-      senderUid: currentUid,
-      recipientUid: params.recipientUid || nudgeData.recipientUid || null,
-      triggerLatitude: params.triggerLatitude,
-      triggerLongitude: params.triggerLongitude,
-      triggeredAt: params.triggeredAt ?? getServerTimestamp(),
-      status: 'CREATED',
-      createdAt: getServerTimestamp(),
-      updatedAt: getServerTimestamp(),
-    };
+      // 2. Check if this exact trigger event ID already exists
+      const existingDoc = await transaction.get(ref);
+      if (existingDoc.exists) {
+        created = false;
+        return;
+      }
 
-    transaction.set(ref, triggerData);
-    transaction.update(nudgeRef, {
-      status: 'triggered',
-      lastTriggeredAt: getServerTimestamp(),
-      triggeredAt: nudgeData.triggeredAt || getServerTimestamp(),
-      updatedAt: getServerTimestamp(),
+      const triggerData = {
+        nudgeId,
+        triggerEventId,
+        senderUid: currentUid,
+        recipientUid: params.recipientUid || nudgeData.recipientUid || null,
+        triggerLatitude: params.triggerLatitude,
+        triggerLongitude: params.triggerLongitude,
+        triggeredAt: params.triggeredAt ?? getServerTimestamp(),
+        status: 'CREATED',
+        createdAt: getServerTimestamp(),
+        updatedAt: getServerTimestamp(),
+      };
+
+      transaction.set(ref, triggerData);
+      transaction.update(nudgeRef, {
+        status: 'triggered',
+        lastTriggeredAt: getServerTimestamp(),
+        triggeredAt: nudgeData.triggeredAt || getServerTimestamp(),
+        updatedAt: getServerTimestamp(),
+      });
+
+      created = true;
     });
 
-    created = true;
-  });
-
-  return { id: triggerEventId, created, cooldown: cooldownActive };
+    console.log(`[FIREBASE_DIAG]\noperation result = ${created ? 'SUCCESS (status: triggered)' : (cooldownActive ? 'SKIPPED (cooldown active)' : 'ALREADY_EXISTS')}\nerror if any = NONE`);
+    if (created) {
+      console.log(`[DELIVERY_TRACE] sender trigger\n→ data written/sent: document nudges/${nudgeId} updated to status=triggered, triggerEvent created\n→ recipient: ${params.recipientUid || 'unknown'}`);
+    }
+    return { id: triggerEventId, created, cooldown: cooldownActive };
+  } catch (err) {
+    console.error(`[FIREBASE_DIAG]\noperation result = FAILED\nerror if any = ${err.message}`);
+    throw err;
+  }
 }
 
 /**

@@ -214,7 +214,7 @@ export async function createNudge({
   };
 
   const ref = await nudgeCollection().add(data);
-  console.log('[NUDGR_DEBUG] Created Nudgr with ID:', ref.id, 'enabled: true');
+  console.log(`[NUDGR_DIAG]\nNudgr creation SUCCESS\nNudgr ID = ${ref.id}\nsenderUid = ${data.senderUid}\nrecipientUid = ${data.recipientUid}\nconfigured center = lat ${data.triggerLatitude}, lon ${data.triggerLongitude}\nconfigured radius = ${data.radiusKm} km\nstatus = ${data.status}\nenabled = true`);
   return { id: ref.id, ...data };
 }
 
