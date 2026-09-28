@@ -6,11 +6,11 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  Button,
   Switch,
   Modal,
   ScrollView,
   Platform,
+  StatusBar,
 } from 'react-native';
 import {
   getNudge,
@@ -24,6 +24,7 @@ import {
 } from '../db/nudges';
 import { playNudgeMessage, stopNudgeMessage } from '../voice/playback';
 import { VOICE_STYLES } from '../voice/tts';
+import { THEME } from './theme';
 
 export default function NudgeDetailScreen({ nudgeId, isReceived, autoPlay = false, onBack }) {
   const [nudge, setNudge] = useState(null);
@@ -74,10 +75,8 @@ export default function NudgeDetailScreen({ nudgeId, isReceived, autoPlay = fals
   const handleToggle = async (newValue) => {
     if (!nudge) return;
     if (!newValue) {
-      // User is turning OFF -> Show modal dialog
       setDisableModalVisible(true);
     } else {
-      // User is turning ON -> Turn ON immediately
       try {
         await setNudgeEnabled(nudge.id, true);
         setNudge((prev) => (prev ? { ...prev, enabled: true, disableMode: null } : null));
@@ -106,22 +105,21 @@ export default function NudgeDetailScreen({ nudgeId, isReceived, autoPlay = fals
 
   if (loading) {
     return (
-      <View style={styles.container}>
-        <ActivityIndicator style={{ marginTop: 20 }} color="#2e7d32" />
-        <View style={{ marginTop: 12 }}>
-          <Button title="Back" onPress={onBack} />
-        </View>
+      <View style={[styles.screen, styles.center]}>
+        <StatusBar barStyle="light-content" backgroundColor={THEME.colors.bg} />
+        <ActivityIndicator size="large" color={THEME.colors.accentPrimary} />
       </View>
     );
   }
 
   if (!nudge) {
     return (
-      <View style={styles.container}>
-        <Text style={styles.hint}>This Nudgr is no longer available.</Text>
-        <View style={{ marginTop: 12 }}>
-          <Button title="Back" onPress={onBack} />
-        </View>
+      <View style={[styles.screen, styles.center]}>
+        <StatusBar barStyle="light-content" backgroundColor={THEME.colors.bg} />
+        <Text style={styles.missingText}>This Nudgr is no longer available.</Text>
+        <TouchableOpacity style={styles.backButton} onPress={onBack} activeOpacity={0.8}>
+          <Text style={styles.backButtonText}>← Go Back</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -137,10 +135,10 @@ export default function NudgeDetailScreen({ nudgeId, isReceived, autoPlay = fals
 
   return (
     <View style={styles.screen}>
+      <StatusBar barStyle="light-content" backgroundColor={THEME.colors.bg} />
+
+      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerTitleContainer} pointerEvents="none">
-          <Text style={styles.headerTitle}>Nudgr Details</Text>
-        </View>
         <TouchableOpacity
           onPress={async () => {
             await stopNudgeMessage();
@@ -152,144 +150,154 @@ export default function NudgeDetailScreen({ nudgeId, isReceived, autoPlay = fals
         >
           <Text style={styles.backArrow}>‹</Text>
         </TouchableOpacity>
+        <View style={styles.headerTitleContainer} pointerEvents="none">
+          <Text style={styles.headerTitle}>Nudgr Details</Text>
+        </View>
+        <View style={{ width: 44 }} />
       </View>
 
-      <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 36 }}>
-
-      {/* Primary ON / OFF Switch Card */}
-      <View style={[styles.switchCard, !isActive && styles.switchCardDisabled]}>
-        <View style={{ flex: 1 }}>
-          <Text style={styles.switchTitle}>
-            Nudgr Alarm is {isActive ? 'ACTIVE' : 'OFF'}
-          </Text>
-          <Text style={styles.switchSubtitle}>
-            {isActive
-              ? 'This reminder will trigger when location or schedule conditions are met.'
-              : summary.secondaryText || 'This Nudgr is currently disabled.'}
-          </Text>
-        </View>
-        <View style={styles.switchControlBox}>
-          <Text style={[styles.switchStateText, isActive ? styles.textOn : styles.textOff]}>
-            {isActive ? 'ON' : 'OFF'}
-          </Text>
-          <Switch
-            value={isActive}
-            onValueChange={handleToggle}
-            trackColor={{ false: '#cbd5e1', true: '#86efac' }}
-            thumbColor={isActive ? '#16a34a' : '#f8fafc'}
-            ios_backgroundColor="#cbd5e1"
-            style={{ transform: Platform.OS === 'ios' ? [{ scaleX: 0.9 }, { scaleY: 0.9 }] : [{ scaleX: 1.1 }, { scaleY: 1.1 }] }}
-          />
-        </View>
-      </View>
-
-      <View style={styles.card}>
-        <Text style={styles.label}>{isReceived ? 'From' : 'To'}</Text>
-        <Text style={styles.value}>
-          {isReceived ? nudge.senderName || 'Unknown' : nudge.recipientName || 'Unknown'}
-        </Text>
-
-        <Text style={styles.label}>Message</Text>
-        <Text style={styles.value}>"{nudge.message}"</Text>
-
-        <Text style={styles.label}>Trigger location</Text>
-        <Text style={styles.value}>
-          📍 {nudge.triggerLabel || 'Custom'}: {nudge.triggerLatitude?.toFixed(4)}, {nudge.triggerLongitude?.toFixed(4)}
-        </Text>
-
-        <Text style={styles.label}>Radius</Text>
-        <Text style={styles.value}>{nudge.radiusKm?.toFixed(1)} km</Text>
-
-        {nudge.schedule && (
-          <>
-            <Text style={styles.label}>Schedule</Text>
-            <Text style={styles.value}>
-              {nudge.schedule.afterTimeText
-                ? `⏰ Only after ${nudge.schedule.afterTimeText}`
-                : typeof nudge.schedule.afterHour === 'number'
-                ? `⏰ Only after ${nudge.schedule.afterHour}:00`
-                : nudge.schedule.activeAfter
-                ? `📅 From ${new Date(nudge.schedule.activeAfter).toLocaleDateString()}`
-                : 'Active'}
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* Primary ON / OFF Switch Floating Glass Card */}
+        <View style={[styles.switchGlassCard, !isActive && styles.cardMuted]}>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.switchTitle}>
+              Alarm is {isActive ? 'ACTIVE' : 'PAUSED'}
             </Text>
-          </>
-        )}
-
-        <Text style={styles.label}>Alarm Status</Text>
-        <View style={{ flexDirection: 'row', alignItems: 'center', marginTop: 4 }}>
-          <View style={[styles.badge, isActive ? styles.badgeActive : styles.badgePaused]}>
-            <Text style={[styles.badgeText, isActive ? styles.badgeTextActive : styles.badgeTextPaused]}>
-              {summary.statusText} • {summary.secondaryText}
+            <Text style={styles.switchSubtitle}>
+              {isActive
+                ? 'Reminder triggers when location or schedule conditions are met.'
+                : summary.secondaryText || 'This Nudgr is currently disabled.'}
             </Text>
+          </View>
+          <View style={styles.switchControlWrapper}>
+            <Text style={[styles.switchLabelText, isActive ? styles.labelActive : styles.labelMuted]}>
+              {isActive ? 'ON' : 'OFF'}
+            </Text>
+            <Switch
+              value={isActive}
+              onValueChange={handleToggle}
+              trackColor={{ false: 'rgba(255,255,255,0.15)', true: 'rgba(139, 124, 255, 0.45)' }}
+              thumbColor={isActive ? THEME.colors.accentPrimary : '#94a3b8'}
+              ios_backgroundColor="rgba(255,255,255,0.15)"
+              style={{ transform: Platform.OS === 'ios' ? [{ scaleX: 0.9 }, { scaleY: 0.9 }] : [{ scaleX: 1.05 }, { scaleY: 1.05 }] }}
+            />
           </View>
         </View>
 
-        {hasVoice && (
-          <>
-            <Text style={styles.label}>Voice Audio</Text>
-            <Text style={styles.value}>{voiceStyleName}</Text>
-            <TouchableOpacity
-              style={styles.voiceButton}
-              onPress={isPlaying ? handleStop : () => handlePlay(nudge)}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.voiceButtonText}>
-                {isPlaying ? '⏹ Stop Audio' : '🔊 Play Nudgr Message'}
+        {/* Detailed Information Glass Card */}
+        <View style={styles.detailsGlassCard}>
+          <Text style={styles.infoLabel}>{isReceived ? 'RECEIVED FROM' : 'SENT TO'}</Text>
+          <Text style={styles.infoValue}>
+            {isReceived ? nudge.senderName || 'Unknown' : nudge.recipientName || 'Unknown'}
+          </Text>
+
+          <View style={styles.fieldDivider} />
+
+          <Text style={styles.infoLabel}>MESSAGE</Text>
+          <View style={styles.messageBox}>
+            <Text style={styles.messageText}>"{nudge.message}"</Text>
+          </View>
+
+          <View style={styles.fieldDivider} />
+
+          <Text style={styles.infoLabel}>TRIGGER LOCATION & RADIUS</Text>
+          <Text style={styles.infoValue}>
+            📍 {nudge.triggerLabel || 'Arrival Location'}: {nudge.triggerLatitude?.toFixed(4)}, {nudge.triggerLongitude?.toFixed(4)}
+          </Text>
+          <Text style={styles.infoSubValue}>
+            Radius: {nudge.radiusKm?.toFixed(1)} km
+          </Text>
+
+          {nudge.schedule && (
+            <>
+              <View style={styles.fieldDivider} />
+              <Text style={styles.infoLabel}>SCHEDULE</Text>
+              <Text style={styles.infoValue}>
+                {nudge.schedule.afterTimeText
+                  ? `⏰ Only after ${nudge.schedule.afterTimeText}`
+                  : typeof nudge.schedule.afterHour === 'number'
+                  ? `⏰ Only after ${nudge.schedule.afterHour}:00`
+                  : nudge.schedule.activeAfter
+                  ? `📅 From ${new Date(nudge.schedule.activeAfter).toLocaleDateString()}`
+                  : 'Active'}
               </Text>
-            </TouchableOpacity>
-          </>
+            </>
+          )}
+
+          <View style={styles.fieldDivider} />
+
+          <Text style={styles.infoLabel}>STATUS</Text>
+          <View style={styles.statusRow}>
+            <View style={[styles.statusBadge, isActive ? styles.badgeActive : styles.badgePaused]}>
+              <Text style={[styles.statusBadgeText, isActive ? styles.badgeTextActive : styles.badgeTextPaused]}>
+                {summary.statusText} • {summary.secondaryText}
+              </Text>
+            </View>
+          </View>
+
+          {hasVoice && (
+            <>
+              <View style={styles.fieldDivider} />
+              <Text style={styles.infoLabel}>VOICE AUDIO</Text>
+              <Text style={styles.infoValue}>{voiceStyleName}</Text>
+              <TouchableOpacity
+                style={styles.voiceButton}
+                onPress={isPlaying ? handleStop : () => handlePlay(nudge)}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.voiceButtonText}>
+                  {isPlaying ? '⏹ Stop Audio' : '🔊 Play Voice Message'}
+                </Text>
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+
+        {/* Action Buttons */}
+        {isReceived && nudge.status !== NUDGE_STATUS.COMPLETED && (
+          <TouchableOpacity
+            style={styles.doneButton}
+            onPress={async () => {
+              try {
+                await stopNudgeMessage();
+                await markCompleted(nudge.id);
+                onBack();
+              } catch (e) {
+                Alert.alert('Could not update', 'Please try again.');
+              }
+            }}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.doneButtonText}>✓ Mark Completed</Text>
+          </TouchableOpacity>
         )}
-      </View>
 
-      {isReceived && nudge.status !== NUDGE_STATUS.COMPLETED && (
-        <TouchableOpacity
-          style={styles.doneButton}
-          onPress={async () => {
-            try {
-              await stopNudgeMessage();
-              await markCompleted(nudge.id);
-              onBack();
-            } catch (e) {
-              Alert.alert('Could not update', 'Please try again.');
-            }
-          }}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.doneButtonText}>✓ Mark Done</Text>
-        </TouchableOpacity>
-      )}
+        {!isReceived && nudge.status === NUDGE_STATUS.ACTIVE && (
+          <TouchableOpacity
+            style={styles.cancelButton}
+            onPress={async () => {
+              try {
+                await stopNudgeMessage();
+                await cancelNudge(nudge.id);
+                onBack();
+              } catch (e) {
+                Alert.alert('Could not update', 'Please try again.');
+              }
+            }}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.cancelButtonText}>Cancel Nudgr</Text>
+          </TouchableOpacity>
+        )}
 
-      {!isReceived && nudge.status === NUDGE_STATUS.ACTIVE && (
-        <TouchableOpacity
-          style={styles.cancelButton}
-          onPress={async () => {
-            try {
-              await stopNudgeMessage();
-              await cancelNudge(nudge.id);
-              onBack();
-            } catch (e) {
-              Alert.alert('Could not update', 'Please try again.');
-            }
-          }}
-          activeOpacity={0.85}
-        >
-          <Text style={styles.cancelButtonText}>Cancel Nudgr</Text>
-        </TouchableOpacity>
-      )}
+        <View style={{ height: 40 }} />
+      </ScrollView>
 
-      <View style={{ marginTop: 12 }}>
-        <Button
-          title="← Back"
-          onPress={async () => {
-            await stopNudgeMessage();
-            onBack();
-          }}
-        />
-      </View>
-
-      {/* -------------------------------------------------------- */}
-      {/* TURN OFF NUDGR CHOICE MODAL */}
-      {/* -------------------------------------------------------- */}
+      {/* Turn off Modal */}
       <Modal
         visible={disableModalVisible}
         transparent
@@ -297,46 +305,46 @@ export default function NudgeDetailScreen({ nudgeId, isReceived, autoPlay = fals
         onRequestClose={handleCancelDisable}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Turn off Nudgr?</Text>
-            <Text style={styles.modalMessage}>
-              Choose how you would like to disable this Nudgr:
+          <View style={styles.modalGlassCard}>
+            <Text style={styles.modalTitle}>Pause this Nudgr?</Text>
+            <Text style={styles.modalSubtitle}>
+              Choose when this arrival alert should automatically resume:
             </Text>
 
             <TouchableOpacity
-              style={styles.modalOptionBtn}
+              style={styles.modalOption}
               onPress={() => handleConfirmDisable(NUDGE_DISABLE_MODE.TODAY)}
               activeOpacity={0.8}
             >
-              <View style={styles.optionIconBox}>
-                <Text style={styles.optionIcon}>☀️</Text>
+              <View style={styles.modalOptionIconBox}>
+                <Text style={styles.modalOptionIcon}>☀️</Text>
               </View>
-              <View style={styles.optionTextBox}>
-                <Text style={styles.optionTitle}>Today only</Text>
-                <Text style={styles.optionSubtitle}>
-                  Paused for the rest of today. Automatically turns back ON tomorrow.
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalOptionTitle}>Today only</Text>
+                <Text style={styles.modalOptionDesc}>
+                  Paused for today. Resumes automatically tomorrow morning.
                 </Text>
               </View>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.modalOptionBtn}
+              style={styles.modalOption}
               onPress={() => handleConfirmDisable(NUDGE_DISABLE_MODE.MANUAL)}
               activeOpacity={0.8}
             >
-              <View style={styles.optionIconBox}>
-                <Text style={styles.optionIcon}>⏸️</Text>
+              <View style={styles.modalOptionIconBox}>
+                <Text style={styles.modalOptionIcon}>⏸️</Text>
               </View>
-              <View style={styles.optionTextBox}>
-                <Text style={styles.optionTitle}>Turn off until I turn it on</Text>
-                <Text style={styles.optionSubtitle}>
-                  Stays disabled until you manually toggle the switch back ON.
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalOptionTitle}>Until turned back on</Text>
+                <Text style={styles.modalOptionDesc}>
+                  Stays paused until you toggle the switch back ON.
                 </Text>
               </View>
             </TouchableOpacity>
 
             <TouchableOpacity
-              style={styles.modalCancelBtn}
+              style={styles.modalCancel}
               onPress={handleCancelDisable}
               activeOpacity={0.8}
             >
@@ -345,7 +353,6 @@ export default function NudgeDetailScreen({ nudgeId, isReceived, autoPlay = fals
           </View>
         </View>
       </Modal>
-    </ScrollView>
     </View>
   );
 }
@@ -353,16 +360,28 @@ export default function NudgeDetailScreen({ nudgeId, isReceived, autoPlay = fals
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: THEME.colors.bg,
+  },
+  center: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 24,
+  },
+  missingText: {
+    fontSize: 16,
+    color: THEME.colors.textSecondary,
+    marginBottom: 16,
+    textAlign: 'center',
   },
   header: {
-    height: 52,
+    height: 54,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    backgroundColor: '#ffffff',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(7, 10, 18, 0.85)',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.07)',
+    borderBottomColor: THEME.colors.glassBorderSubtle,
     zIndex: 10,
   },
   headerTitleContainer: {
@@ -371,9 +390,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
-    color: '#1a1a1a',
+    color: THEME.colors.textPrimary,
     letterSpacing: -0.3,
   },
   backBtn: {
@@ -381,199 +400,288 @@ const styles = StyleSheet.create({
     height: 44,
     justifyContent: 'center',
     alignItems: 'center',
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
   },
   backArrow: {
-    fontSize: 32,
-    color: '#16a34a',
+    fontSize: 28,
+    color: THEME.colors.accentPrimary,
     fontWeight: '300',
-    lineHeight: 34,
+    lineHeight: 30,
   },
-  container: { flex: 1, padding: 16, backgroundColor: '#f8fafc' },
-  heading: { fontSize: 24, fontWeight: '800', color: '#0f172a', marginBottom: 12 },
-  switchCard: {
+  container: {
+    flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 40,
+  },
+
+  // --- Switch Glass Card ---
+  switchGlassCard: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    backgroundColor: '#ffffff',
-    padding: 16,
-    borderRadius: 16,
-    marginBottom: 14,
-    borderWidth: 1.5,
-    borderColor: '#dcfce7',
-    shadowColor: '#16a34a',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 8,
-    elevation: 3,
+    backgroundColor: THEME.colors.bgCard,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 124, 255, 0.3)',
+    borderRadius: THEME.radius.card,
+    padding: 18,
+    marginBottom: 16,
+    shadowColor: THEME.colors.accentPrimary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 10,
+    elevation: 4,
   },
-  switchCardDisabled: {
-    backgroundColor: '#f1f5f9',
-    borderColor: '#cbd5e1',
+  cardMuted: {
+    backgroundColor: 'rgba(255, 255, 255, 0.03)',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
     shadowOpacity: 0,
     elevation: 0,
   },
   switchTitle: {
     fontSize: 16,
     fontWeight: '800',
-    color: '#0f172a',
-    marginBottom: 2,
+    color: THEME.colors.textPrimary,
+    marginBottom: 3,
   },
   switchSubtitle: {
     fontSize: 12,
-    color: '#64748b',
+    color: THEME.colors.textSecondary,
     lineHeight: 16,
   },
-  switchControlBox: {
+  switchControlWrapper: {
     alignItems: 'center',
     marginLeft: 12,
   },
-  switchStateText: {
-    fontSize: 11,
+  switchLabelText: {
+    fontSize: 10,
     fontWeight: '800',
+    letterSpacing: 0.5,
     marginBottom: 2,
   },
-  textOn: {
-    color: '#16a34a',
+  labelActive: {
+    color: THEME.colors.accentPrimary,
   },
-  textOff: {
-    color: '#94a3b8',
+  labelMuted: {
+    color: THEME.colors.textTertiary,
   },
-  card: {
-    backgroundColor: '#ffffff',
-    padding: 16,
-    borderRadius: 16,
-    marginBottom: 16,
+
+  // --- Details Glass Card ---
+  detailsGlassCard: {
+    backgroundColor: THEME.colors.bgCard,
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: THEME.radius.card,
+    padding: 20,
+    marginBottom: 18,
   },
-  label: { fontSize: 11, fontWeight: '800', color: '#64748b', marginTop: 10, textTransform: 'uppercase', letterSpacing: 0.5 },
-  value: { fontSize: 16, color: '#1e293b', marginTop: 2, fontWeight: '500' },
-  badge: {
+  infoLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: THEME.colors.textTertiary,
+    letterSpacing: 1.2,
+    marginBottom: 4,
+  },
+  infoValue: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: THEME.colors.textPrimary,
+    letterSpacing: -0.2,
+  },
+  infoSubValue: {
+    fontSize: 13,
+    color: THEME.colors.textSecondary,
+    marginTop: 2,
+  },
+  fieldDivider: {
+    height: 1,
+    backgroundColor: THEME.colors.glassBorderSubtle,
+    marginVertical: 14,
+  },
+  messageBox: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.07)',
+    borderRadius: 14,
+    padding: 14,
+    marginTop: 4,
+  },
+  messageText: {
+    fontSize: 16,
+    color: 'rgba(255, 255, 255, 0.95)',
+    lineHeight: 22,
+    fontStyle: 'italic',
+  },
+  statusRow: {
+    flexDirection: 'row',
+    marginTop: 4,
+  },
+  statusBadge: {
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 8,
   },
   badgeActive: {
-    backgroundColor: '#dcfce7',
+    backgroundColor: 'rgba(48, 209, 88, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(48, 209, 88, 0.3)',
   },
   badgePaused: {
-    backgroundColor: '#fee2e2',
+    backgroundColor: 'rgba(255, 69, 58, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 69, 58, 0.3)',
   },
-  badgeText: {
+  statusBadgeText: {
     fontSize: 12,
     fontWeight: '700',
   },
   badgeTextActive: {
-    color: '#15803d',
+    color: '#86efac',
   },
   badgeTextPaused: {
-    color: '#b91c1c',
+    color: '#fca5a5',
   },
   voiceButton: {
-    backgroundColor: '#0284c7',
-    borderRadius: 10,
+    backgroundColor: 'rgba(90, 200, 250, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(90, 200, 250, 0.35)',
+    borderRadius: 14,
     paddingVertical: 12,
-    paddingHorizontal: 16,
-    marginTop: 12,
     alignItems: 'center',
+    marginTop: 10,
   },
-  voiceButtonText: { color: '#fff', fontWeight: '700', fontSize: 15 },
+  voiceButtonText: {
+    color: THEME.colors.accentSecondary,
+    fontWeight: '700',
+    fontSize: 14,
+  },
+
+  // --- Actions ---
   doneButton: {
-    backgroundColor: '#16a34a',
-    borderRadius: 12,
+    backgroundColor: 'rgba(48, 209, 88, 0.20)',
+    borderWidth: 1,
+    borderColor: THEME.colors.success,
+    borderRadius: THEME.radius.button,
     paddingVertical: 16,
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 12,
   },
-  doneButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
+  doneButtonText: {
+    color: '#86efac',
+    fontSize: 16,
+    fontWeight: '800',
+  },
   cancelButton: {
-    backgroundColor: '#dc2626',
-    borderRadius: 12,
+    backgroundColor: 'rgba(255, 69, 58, 0.15)',
+    borderWidth: 1,
+    borderColor: THEME.colors.danger,
+    borderRadius: THEME.radius.button,
     paddingVertical: 16,
     alignItems: 'center',
-    marginBottom: 10,
+    marginBottom: 12,
   },
-  cancelButtonText: { color: '#fff', fontSize: 16, fontWeight: 'bold' },
-  hint: { fontSize: 14, color: '#888', marginTop: 12 },
-  /* Modal Styles */
+  cancelButtonText: {
+    color: '#fca5a5',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  backButton: {
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    alignItems: 'center',
+  },
+  backButtonText: {
+    color: THEME.colors.textPrimary,
+    fontWeight: '700',
+    fontSize: 14,
+  },
+
+  // --- Modal Styles ---
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.6)',
+    backgroundColor: 'rgba(0, 0, 0, 0.75)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 20,
+    padding: 24,
   },
-  modalCard: {
+  modalGlassCard: {
     width: '100%',
     maxWidth: 380,
-    backgroundColor: '#ffffff',
-    borderRadius: 24,
+    backgroundColor: '#0d111d',
+    borderRadius: THEME.radius.cardLg,
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorderHighlight,
     padding: 24,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.25,
-    shadowRadius: 20,
-    elevation: 10,
+    shadowOffset: { width: 0, height: 12 },
+    shadowOpacity: 0.6,
+    shadowRadius: 24,
+    elevation: 15,
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: '800',
-    color: '#0f172a',
-    marginBottom: 8,
+    color: THEME.colors.textPrimary,
     textAlign: 'center',
+    marginBottom: 6,
   },
-  modalMessage: {
-    fontSize: 14,
-    color: '#64748b',
+  modalSubtitle: {
+    fontSize: 13,
+    color: THEME.colors.textSecondary,
     textAlign: 'center',
+    lineHeight: 18,
     marginBottom: 20,
-    lineHeight: 20,
   },
-  modalOptionBtn: {
+  modalOption: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#f8fafc',
-    borderWidth: 1.5,
-    borderColor: '#e2e8f0',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
     borderRadius: 16,
     padding: 14,
-    marginBottom: 12,
+    marginBottom: 10,
+    gap: 12,
   },
-  optionIconBox: {
-    width: 40,
-    height: 40,
+  modalOptionIconBox: {
+    width: 38,
+    height: 38,
     borderRadius: 12,
-    backgroundColor: '#e2e8f0',
-    justifyContent: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.07)',
     alignItems: 'center',
-    marginRight: 12,
+    justifyContent: 'center',
   },
-  optionIcon: {
+  modalOptionIcon: {
     fontSize: 18,
   },
-  optionTextBox: {
-    flex: 1,
-  },
-  optionTitle: {
+  modalOptionTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#0f172a',
+    color: THEME.colors.textPrimary,
     marginBottom: 2,
   },
-  optionSubtitle: {
-    fontSize: 12,
-    color: '#64748b',
-    lineHeight: 16,
+  modalOptionDesc: {
+    fontSize: 11,
+    color: THEME.colors.textSecondary,
+    lineHeight: 15,
   },
-  modalCancelBtn: {
-    paddingVertical: 12,
+  modalCancel: {
+    paddingVertical: 13,
     alignItems: 'center',
-    marginTop: 4,
+    marginTop: 6,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
   },
   modalCancelText: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#64748b',
+    color: THEME.colors.textSecondary,
   },
 });
-

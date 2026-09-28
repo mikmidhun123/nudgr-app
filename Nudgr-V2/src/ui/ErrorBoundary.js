@@ -5,10 +5,10 @@ import {
   View,
   TouchableOpacity,
 } from 'react-native';
+import { THEME } from './theme';
 
 /**
- * Top-level error boundary. Prevents a hard crash (blank screen) from any
- * unexpected render error and gives the user a way to recover.
+ * Top-level error boundary in iPhone Glass style.
  */
 export default class ErrorBoundary extends React.Component {
   state = { error: null };
@@ -31,13 +31,16 @@ export default class ErrorBoundary extends React.Component {
     if (this.state.error) {
       return (
         <View style={styles.container}>
-          <Text style={styles.title}>Something went wrong</Text>
-          <Text style={styles.message}>
-            {String(this.state.error.message || this.state.error)}
-          </Text>
-          <TouchableOpacity style={styles.button} onPress={this.handleReset}>
-            <Text style={styles.buttonText}>Try again</Text>
-          </TouchableOpacity>
+          <View style={styles.glassCard}>
+            <Text style={styles.icon}>⚠️</Text>
+            <Text style={styles.title}>Something went wrong</Text>
+            <Text style={styles.message}>
+              {String(this.state.error.message || this.state.error)}
+            </Text>
+            <TouchableOpacity style={styles.button} onPress={this.handleReset} activeOpacity={0.85}>
+              <Text style={styles.buttonText}>Try again</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       );
     }
@@ -48,33 +51,47 @@ export default class ErrorBoundary extends React.Component {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
+    backgroundColor: THEME.colors.bg,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 24,
   },
+  glassCard: {
+    width: '100%',
+    maxWidth: 380,
+    backgroundColor: THEME.colors.bgCard,
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: THEME.radius.cardLg,
+    padding: 24,
+    alignItems: 'center',
+  },
+  icon: {
+    fontSize: 36,
+    marginBottom: 12,
+  },
   title: {
     fontSize: 20,
-    fontWeight: 'bold',
-    color: '#c62828',
-    marginBottom: 12,
+    fontWeight: '800',
+    color: THEME.colors.textPrimary,
+    marginBottom: 8,
     textAlign: 'center',
   },
   message: {
-    fontSize: 14,
-    color: '#555',
+    fontSize: 13,
+    color: THEME.colors.textSecondary,
     textAlign: 'center',
     marginBottom: 20,
+    lineHeight: 18,
   },
   button: {
-    backgroundColor: '#2e7d32',
-    borderRadius: 8,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
+    ...THEME.buttonPrimary,
+    width: '100%',
+    paddingVertical: 14,
   },
   buttonText: {
-    color: '#fff',
+    color: '#ffffff',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '800',
   },
 });

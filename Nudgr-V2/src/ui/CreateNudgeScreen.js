@@ -8,7 +8,7 @@ import {
   ScrollView,
   ActivityIndicator,
   Alert,
-  Button,
+  StatusBar,
 } from 'react-native';
 import * as Location from 'expo-location';
 import RadiusSlider from './RadiusSlider';
@@ -29,8 +29,9 @@ import {
   createAndScheduleTimeTestNudge,
   scheduleNudgeTimeAlarm,
 } from '../notifications/localNotifications';
+import { THEME } from './theme';
 
-export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
+export default function CreateNudgeScreen({ connections = [], onCreated, onBack }) {
   const [recipientUid, setRecipientUid] = useState(null);
   const [message, setMessage] = useState('');
   const [trigger, setTrigger] = useState(null); // { latitude, longitude, label }
@@ -116,7 +117,7 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
       if (!hasPerm) {
         const granted = await requestMicPermission();
         if (!granted) {
-          setMicError('Microphone permission is needed to record a voice note. You can still continue using Text-to-Speech below.');
+          setMicError('Microphone permission is needed to record a voice note.');
           return;
         }
       }
@@ -136,7 +137,7 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
       });
     } catch (err) {
       setIsRecording(false);
-      setMicError(err.message || 'Could not start recording. You can still use Text-to-Speech.');
+      setMicError(err.message || 'Could not start recording. You can still use TTS.');
     }
   };
 
@@ -175,9 +176,7 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
     setRecordingSeconds(0);
   };
 
-  // -------------------------------------------------------------
-  // Quick Pure Time Trigger Test (Section 1 of Test Protocol)
-  // -------------------------------------------------------------
+  // Quick pure time test
   const runQuickTimeTest = async (seconds = 60) => {
     setBusy(true);
     setBusyStatus(`Scheduling ${seconds}s Time Trigger Test...`);
@@ -192,9 +191,8 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
         Alert.alert(
           '⏰ Time Trigger Scheduled!',
           `Nudgr ID: ${res.nudgeId}\n` +
-          `Notification ID: ${res.notificationId}\n` +
           `Target Time: ${res.targetTime} (${seconds}s from now)\n\n` +
-          `👉 TEST PROTOCOL:\n1. Press Home / leave app.\n2. Lock your phone.\n3. Wait until ${res.targetTime} for notification to appear.`,
+          `Lock your phone now to verify background delivery!`,
           [{ text: 'OK', onPress: onBack }]
         );
       } else {
@@ -209,9 +207,6 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
     }
   };
 
-  // -------------------------------------------------------------
-  // Submit Nudgr
-  // -------------------------------------------------------------
   const submitWithData = async (voiceNotePayload = null) => {
     const scheduleData =
       schedule === 'afterTime'
@@ -225,7 +220,6 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
         ? { activeAfter: new Date(new Date().setDate(new Date().getDate() + 1)).getTime() }
         : null;
 
-    // Check if this is a pure time test or self-test (no peer / no GPS required)
     if (recipientUid === 'self_test' || !trigger) {
       const testNudge = {
         id: `test_time_${Date.now()}`,
@@ -257,7 +251,6 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
     }
 
     const peer = connections.find((c) => c.otherUid === recipientUid);
-    console.log(`[NUDGR_DIAG] Submitting Nudgr to recipient ${recipientUid}, center: (${trigger.latitude}, ${trigger.longitude}), radius: ${radiusKm}km`);
     const created = await createNudge({
       recipientUid,
       recipientName: peer?.profile?.displayName || peer?.profile?.email || null,
@@ -292,7 +285,6 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
     setBusy(true);
     setError(null);
 
-    // If a voice note was recorded, upload to Cloudflare R2 first
     if (recordedVoice && recordedVoice.uri) {
       setBusyStatus('Uploading voice note to Cloudflare R2...');
       try {
@@ -318,10 +310,9 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
         setBusy(false);
         setBusyStatus(null);
 
-        // Handle upload failure gracefully: allow retry or continuing with TTS
         Alert.alert(
           'Voice Note Upload Failed',
-          `${uploadErr.message || 'Could not upload audio to Cloudflare R2.'}\n\nWould you like to continue creating your Nudgr using the Text-to-Speech voice instead?`,
+          `${uploadErr.message || 'Could not upload audio to Cloudflare R2.'}\n\nContinue creating using Text-to-Speech?`,
           [
             { text: 'Cancel', style: 'cancel' },
             {
@@ -344,7 +335,6 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
         return;
       }
     } else {
-      // Standard Text + TTS Nudgr
       setBusyStatus('Creating Nudgr...');
       try {
         await submitWithData(null);
@@ -365,10 +355,10 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
 
   return (
     <View style={styles.screen}>
+      <StatusBar barStyle="light-content" backgroundColor={THEME.colors.bg} />
+
+      {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerTitleContainer} pointerEvents="none">
-          <Text style={styles.headerTitle}>Create Nudgr</Text>
-        </View>
         <TouchableOpacity
           onPress={onBack}
           style={styles.backBtn}
@@ -377,249 +367,343 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
         >
           <Text style={styles.backArrow}>‹</Text>
         </TouchableOpacity>
-      </View>
-
-      <ScrollView style={styles.container}>
-
-      {/* 🧪 Pure Time Trigger Test Card (No GPS, No Geofence, No Peer Required) */}
-      <View style={styles.timeTestCard}>
-        <Text style={styles.timeTestTitle}>🧪 Pure Time Trigger Test (1–2 min)</Text>
-        <Text style={styles.timeTestSubtitle}>
-          Test time-based scheduling directly. Zero dependency on GPS, geofence, another user, or Firebase.
-        </Text>
-        <View style={styles.timeTestBtnRow}>
-          <TouchableOpacity
-            style={styles.timeTestBtn}
-            onPress={() => runQuickTimeTest(60)}
-            disabled={busy}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.timeTestBtnText}>⏱️ 1-Minute Test (+60s)</Text>
-          </TouchableOpacity>
-          <TouchableOpacity
-            style={styles.timeTestBtn}
-            onPress={() => runQuickTimeTest(120)}
-            disabled={busy}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.timeTestBtnText}>⏱️ 2-Minute Test (+120s)</Text>
-          </TouchableOpacity>
+        <View style={styles.headerTitleContainer} pointerEvents="none">
+          <Text style={styles.headerTitle}>Create Nudgr</Text>
         </View>
+        <View style={{ width: 44 }} />
       </View>
 
-      <Text style={styles.label}>Recipient</Text>
-      {/* Option to test without a peer */}
-      <TouchableOpacity
-        style={[
-          styles.chip,
-          recipientUid === 'self_test' && styles.chipActive,
-        ]}
-        onPress={() => setRecipientUid('self_test')}
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
-        <Text style={[styles.chipText, recipientUid === 'self_test' && styles.chipTextActive]}>
-          👤 Self / Test Nudgr (Single device test)
-        </Text>
-      </TouchableOpacity>
+        {/* Apple-style Form Header */}
+        <View style={styles.formHeader}>
+          <Text style={styles.formTitle}>Create Nudgr</Text>
+          <Text style={styles.formSubtitle}>
+            Send a reminder that arrives at the right place.
+          </Text>
+        </View>
 
-      {connections.length === 0 ? (
-        <Text style={styles.hint}>No peer connections. Use "Self / Test Nudgr" above to test on this device.</Text>
-      ) : (
-        connections.map((c) => (
+        {/* 1. Recipient Panel */}
+        <View style={styles.glassPanel}>
+          <Text style={styles.panelLabel}>RECIPIENT</Text>
+
+          {/* Self / Local Test Chip */}
           <TouchableOpacity
-            key={c.otherUid}
             style={[
-              styles.chip,
-              recipientUid === c.otherUid && styles.chipActive,
+              styles.recipientChip,
+              recipientUid === 'self_test' && styles.recipientChipActive,
             ]}
-            onPress={() => setRecipientUid(c.otherUid)}
+            onPress={() => setRecipientUid('self_test')}
+            activeOpacity={0.8}
           >
-            <Text style={styles.chipText}>
-              {c.profile?.displayName || c.profile?.email || c.otherUid}
-            </Text>
+            <View style={styles.recipientAvatar}>
+              <Text style={styles.recipientAvatarText}>👤</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={[styles.recipientName, recipientUid === 'self_test' && styles.textActive]}>
+                Self / Single-Device Test
+              </Text>
+              <Text style={styles.recipientSub}>Test notification on this phone</Text>
+            </View>
+            {recipientUid === 'self_test' && <Text style={styles.checkIcon}>✓</Text>}
           </TouchableOpacity>
-        ))
-      )}
 
-      <Text style={styles.label}>Message</Text>
-      <TextInput
-        style={[styles.input, { height: 80 }]}
-        placeholder="I'm almost home ❤️"
-        placeholderTextColor="#999"
-        value={message}
-        onChangeText={setMessage}
-        multiline
-      />
-
-      {/* -------------------------------------------------------- */}
-      {/* OPTIONAL VOICE NOTE SECTION */}
-      {/* -------------------------------------------------------- */}
-      <Text style={styles.label}>Voice Note (Optional)</Text>
-      <View style={styles.voiceNoteCard}>
-        {!isRecording && !recordedVoice && (
-          <View>
-            <TouchableOpacity style={styles.recordButton} onPress={handleStartRecord}>
-              <Text style={styles.recordButtonText}>🎙️ Record Voice Note</Text>
-            </TouchableOpacity>
-            <Text style={styles.voiceNoteHint}>
-              Record a personal voice message (up to 60s). It will play automatically when answered.
+          {connections.length === 0 ? (
+            <Text style={styles.hintText}>
+              No peer connections. Select "Self / Single-Device Test" above to test.
             </Text>
-          </View>
-        )}
+          ) : (
+            connections.map((c) => {
+              const name = c.profile?.displayName || c.profile?.email || c.otherUid;
+              const isSelected = recipientUid === c.otherUid;
+              return (
+                <TouchableOpacity
+                  key={c.otherUid}
+                  style={[
+                    styles.recipientChip,
+                    isSelected && styles.recipientChipActive,
+                  ]}
+                  onPress={() => setRecipientUid(c.otherUid)}
+                  activeOpacity={0.8}
+                >
+                  <View style={[styles.recipientAvatar, { backgroundColor: 'rgba(139, 124, 255, 0.15)' }]}>
+                    <Text style={[styles.recipientAvatarText, { color: THEME.colors.accentPrimary }]}>
+                      {name[0].toUpperCase()}
+                    </Text>
+                  </View>
+                  <View style={{ flex: 1 }}>
+                    <Text style={[styles.recipientName, isSelected && styles.textActive]}>
+                      {name}
+                    </Text>
+                    <Text style={styles.recipientSub}>{c.status || 'Connected'}</Text>
+                  </View>
+                  {isSelected && <Text style={styles.checkIcon}>✓</Text>}
+                </TouchableOpacity>
+              );
+            })
+          )}
+        </View>
 
-        {isRecording && (
-          <View style={styles.recordingActiveContainer}>
-            <View style={styles.recordingRow}>
-              <View style={styles.recordingDot} />
-              <Text style={styles.recordingTimer}>
-                Recording: {formatTimer(recordingSeconds)} / 01:00
+        {/* 2. Message Panel */}
+        <View style={styles.glassPanel}>
+          <Text style={styles.panelLabel}>MESSAGE</Text>
+          <TextInput
+            style={styles.messageInput}
+            placeholder="e.g. I'm almost home ❤️"
+            placeholderTextColor={THEME.colors.textTertiary}
+            value={message}
+            onChangeText={setMessage}
+            multiline
+            numberOfLines={3}
+          />
+        </View>
+
+        {/* 3. Location & Radius Panel */}
+        <View style={styles.glassPanel}>
+          <Text style={styles.panelLabel}>LOCATION & RADIUS</Text>
+
+          <View style={styles.locationBtnRow}>
+            <TouchableOpacity
+              style={[
+                styles.locationBtn,
+                trigger?.label === 'My current location' && styles.locationBtnActive,
+              ]}
+              onPress={pickLocation}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.locationBtnIcon}>📍</Text>
+              <Text style={styles.locationBtnText}>Use Current Location</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.locationBtn,
+                trigger?.label?.includes('Time') && styles.locationBtnActive,
+              ]}
+              onPress={() => {
+                setTrigger({ latitude: 0, longitude: 0, label: 'Pure Time Trigger (No GPS)' });
+                setError(null);
+              }}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.locationBtnIcon}>⏱️</Text>
+              <Text style={styles.locationBtnText}>Skip GPS (Time Only)</Text>
+            </TouchableOpacity>
+          </View>
+
+          {trigger && (
+            <View style={styles.locationSelectedBadge}>
+              <Text style={styles.locationBadgeText}>
+                ✓ {trigger.label} {trigger.latitude !== 0 ? `(${trigger.latitude.toFixed(3)}, ${trigger.longitude.toFixed(3)})` : ''}
               </Text>
             </View>
-            <TouchableOpacity style={styles.stopRecordButton} onPress={handleStopRecord}>
-              <Text style={styles.stopRecordButtonText}>⏹ Stop Recording</Text>
+          )}
+
+          {/* Embedded Glass Radius Slider */}
+          <RadiusSlider value={radiusKm} onChange={setRadiusKm} />
+        </View>
+
+        {/* 4. Schedule Panel */}
+        <View style={styles.glassPanel}>
+          <Text style={styles.panelLabel}>SCHEDULE (OPTIONAL)</Text>
+
+          {/* Segmented Control */}
+          <View style={styles.segmentedContainer}>
+            <TouchableOpacity
+              style={[styles.segmentBtn, schedule === 'none' && styles.segmentBtnActive]}
+              onPress={() => setSchedule('none')}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.segmentText, schedule === 'none' && styles.segmentTextActive]}>
+                On Arrival
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.segmentBtn, schedule === 'afterTime' && styles.segmentBtnActive]}
+              onPress={() => setSchedule('afterTime')}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.segmentText, schedule === 'afterTime' && styles.segmentTextActive]}>
+                After Time
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[styles.segmentBtn, schedule === 'tomorrow' && styles.segmentBtnActive]}
+              onPress={() => setSchedule('tomorrow')}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.segmentText, schedule === 'tomorrow' && styles.segmentTextActive]}>
+                Tomorrow
+              </Text>
             </TouchableOpacity>
           </View>
-        )}
 
-        {recordedVoice && !isRecording && (
-          <View style={styles.recordedContainer}>
-            <Text style={styles.recordedTitle}>
-              ✓ Voice note recorded ({Math.round(recordedVoice.durationMs / 1000)}s • {Math.round(recordedVoice.sizeBytes / 1024)} KB)
-            </Text>
-            <View style={styles.voiceActionsRow}>
-              {isPlayingPreview ? (
-                <TouchableOpacity style={styles.previewActionBtn} onPress={handleStopPreview}>
-                  <Text style={styles.previewActionBtnText}>⏹ Stop</Text>
-                </TouchableOpacity>
-              ) : (
-                <TouchableOpacity style={styles.previewActionBtn} onPress={handlePlayPreview}>
-                  <Text style={styles.previewActionBtnText}>▶ Play</Text>
-                </TouchableOpacity>
-              )}
-              <TouchableOpacity style={styles.reRecordBtn} onPress={handleStartRecord}>
-                <Text style={styles.reRecordBtnText}>🔄 Re-record</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.deleteVoiceBtn} onPress={handleDeleteVoice}>
-                <Text style={styles.deleteVoiceBtnText}>🗑️ Delete</Text>
-              </TouchableOpacity>
+          {schedule === 'afterTime' && (
+            <TimePickerRoller
+              hour12={timePickerState.hour12}
+              minute={timePickerState.minute}
+              period={timePickerState.period}
+              onChange={handleTimeChange}
+            />
+          )}
+
+          {schedule === 'tomorrow' && (
+            <View style={styles.scheduleInfoBox}>
+              <Text style={styles.scheduleInfoText}>
+                📅 This Nudgr will become active starting tomorrow.
+              </Text>
             </View>
+          )}
+        </View>
+
+        {/* 5. Voice Options Panel */}
+        <View style={styles.glassPanel}>
+          <Text style={styles.panelLabel}>VOICE & AUDIO</Text>
+
+          {/* Voice Note Recorder Section */}
+          <View style={styles.voiceNoteBox}>
+            {!isRecording && !recordedVoice && (
+              <TouchableOpacity
+                style={styles.recordButton}
+                onPress={handleStartRecord}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.recordButtonIcon}>🎙️</Text>
+                <Text style={styles.recordButtonText}>Record Personal Voice Note</Text>
+              </TouchableOpacity>
+            )}
+
+            {isRecording && (
+              <View style={styles.recordingRow}>
+                <View style={styles.recordingDot} />
+                <Text style={styles.recordingTimer}>
+                  Recording: {formatTimer(recordingSeconds)} / 01:00
+                </Text>
+                <TouchableOpacity
+                  style={styles.stopRecordBtn}
+                  onPress={handleStopRecord}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.stopRecordText}>⏹ Stop</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
+            {recordedVoice && !isRecording && (
+              <View style={styles.recordedCard}>
+                <Text style={styles.recordedLabel}>
+                  ✓ Voice note ready ({Math.round(recordedVoice.durationMs / 1000)}s)
+                </Text>
+                <View style={styles.recordedActionRow}>
+                  {isPlayingPreview ? (
+                    <TouchableOpacity style={styles.voiceActionBtn} onPress={handleStopPreview}>
+                      <Text style={styles.voiceActionText}>⏹ Stop</Text>
+                    </TouchableOpacity>
+                  ) : (
+                    <TouchableOpacity style={styles.voiceActionBtn} onPress={handlePlayPreview}>
+                      <Text style={styles.voiceActionText}>▶ Play</Text>
+                    </TouchableOpacity>
+                  )}
+                  <TouchableOpacity style={styles.voiceActionBtn} onPress={handleStartRecord}>
+                    <Text style={styles.voiceActionText}>🔄 Re-record</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={[styles.voiceActionBtn, styles.deleteBtn]} onPress={handleDeleteVoice}>
+                    <Text style={[styles.voiceActionText, { color: THEME.colors.danger }]}>🗑️ Delete</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            )}
+
+            {micError && <Text style={styles.micErrorText}>{micError}</Text>}
+          </View>
+
+          {/* Horizontal Voice Style Cards */}
+          <Text style={[styles.panelSubLabel, { marginTop: 14 }]}>TEXT-TO-SPEECH STYLE</Text>
+          <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.voiceStyleRow}>
+            {VOICE_STYLE_LIST.map((v) => {
+              const isSelected = voiceStyle === v.key;
+              return (
+                <TouchableOpacity
+                  key={v.key}
+                  style={[styles.voiceCard, isSelected && styles.voiceCardActive]}
+                  onPress={() => setVoiceStyle(v.key)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.voiceCardTitle, isSelected && styles.voiceCardTitleActive]}>
+                    {v.label}
+                  </Text>
+                  <Text style={styles.voiceCardDesc} numberOfLines={2}>{v.description}</Text>
+                </TouchableOpacity>
+              );
+            })}
+          </ScrollView>
+
+          {voiceStyle !== 'none' && (
+            <TouchableOpacity style={styles.previewTtsBtn} onPress={onPreviewTTS} activeOpacity={0.8}>
+              <Text style={styles.previewTtsText}>🔊 Preview Selected Voice</Text>
+            </TouchableOpacity>
+          )}
+        </View>
+
+        {/* 6. Quick Test Panel */}
+        <View style={[styles.glassPanel, { borderColor: 'rgba(90, 200, 250, 0.25)' }]}>
+          <Text style={[styles.panelLabel, { color: THEME.colors.accentSecondary }]}>
+            🧪 QUICK TIME TRIGGER TEST
+          </Text>
+          <Text style={styles.testSubtitle}>
+            Test phone alert delivery without needing GPS or peer pairing.
+          </Text>
+          <View style={styles.testBtnRow}>
+            <TouchableOpacity
+              style={styles.testBtn}
+              onPress={() => runQuickTimeTest(60)}
+              disabled={busy}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.testBtnText}>⏱️ 1-Min (+60s)</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.testBtn}
+              onPress={() => runQuickTimeTest(120)}
+              disabled={busy}
+              activeOpacity={0.8}
+            >
+              <Text style={styles.testBtnText}>⏱️ 2-Min (+120s)</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+
+        {error && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{error}</Text>
           </View>
         )}
 
-        {micError && <Text style={styles.micErrorText}>{micError}</Text>}
-      </View>
-
-      <Text style={styles.label}>Trigger location</Text>
-      <View style={{ flexDirection: 'row', gap: 8 }}>
-        <TouchableOpacity style={[styles.secondaryButton, { flex: 1 }]} onPress={pickLocation}>
-          <Text style={styles.secondaryButtonText}>Use current location</Text>
-        </TouchableOpacity>
+        {/* Primary Action Button */}
         <TouchableOpacity
-          style={[
-            styles.secondaryButton,
-            { flex: 1, backgroundColor: trigger?.label?.includes('Time') ? '#e8f5e9' : '#f8fafc', borderColor: '#86efac', borderWidth: 1 },
-          ]}
-          onPress={() => {
-            setTrigger({ latitude: 0, longitude: 0, label: 'Pure Time Trigger (No GPS)' });
-            setError(null);
-          }}
+          style={styles.submitButton}
+          onPress={submit}
+          disabled={busy}
+          activeOpacity={0.85}
         >
-          <Text style={{ color: '#16a34a', fontWeight: '600' }}>⏱️ Skip GPS (Time Only)</Text>
+          {busy ? (
+            <View style={styles.busyRow}>
+              <ActivityIndicator color="#ffffff" style={{ marginRight: 8 }} />
+              <Text style={styles.submitButtonText}>{busyStatus || 'Creating Nudgr...'}</Text>
+            </View>
+          ) : (
+            <Text style={styles.submitButtonText}>Create Nudgr</Text>
+          )}
         </TouchableOpacity>
-      </View>
-      {trigger && (
-        <Text style={styles.hint}>
-          {trigger.label}: {trigger.latitude.toFixed(4)}, {trigger.longitude.toFixed(4)}
-        </Text>
-      )}
 
-      <RadiusSlider value={radiusKm} onChange={setRadiusKm} />
-
-      <Text style={styles.label}>Schedule (optional)</Text>
-
-      {/* Option 1: No Schedule */}
-      <TouchableOpacity
-        style={[styles.chip, schedule === 'none' && styles.chipActive]}
-        onPress={() => setSchedule('none')}
-      >
-        <Text style={[styles.chipText, schedule === 'none' && styles.chipTextActive]}>
-          No schedule (trigger on arrival)
-        </Text>
-      </TouchableOpacity>
-
-      {/* Option 2: Only after [Custom Time] with embedded time roller */}
-      <TouchableOpacity
-        style={[styles.chip, schedule === 'afterTime' && styles.chipActive]}
-        onPress={() => setSchedule('afterTime')}
-      >
-        <Text style={[styles.chipText, schedule === 'afterTime' && styles.chipTextActive]}>
-          Only after {timePickerState.formattedText}
-        </Text>
-      </TouchableOpacity>
-
-      {schedule === 'afterTime' && (
-        <TimePickerRoller
-          hour12={timePickerState.hour12}
-          minute={timePickerState.minute}
-          period={timePickerState.period}
-          onChange={handleTimeChange}
-        />
-      )}
-
-      {/* Option 3: From Tomorrow */}
-      <TouchableOpacity
-        style={[styles.chip, schedule === 'tomorrow' && styles.chipActive]}
-        onPress={() => setSchedule('tomorrow')}
-      >
-        <Text style={[styles.chipText, schedule === 'tomorrow' && styles.chipTextActive]}>
-          From tomorrow
-        </Text>
-      </TouchableOpacity>
-
-      <Text style={styles.label}>Voice Alert Style (TTS Fallback)</Text>
-      <View style={styles.voiceGrid}>
-        {VOICE_STYLE_LIST.map((v) => (
-          <TouchableOpacity
-            key={v.key}
-            style={[
-              styles.voiceChip,
-              voiceStyle === v.key && styles.voiceChipActive,
-            ]}
-            onPress={() => setVoiceStyle(v.key)}
-          >
-            <Text style={[styles.voiceChipTitle, voiceStyle === v.key && styles.voiceChipTextActive]}>
-              {v.label}
-            </Text>
-            <Text style={styles.voiceChipDesc}>{v.description}</Text>
-          </TouchableOpacity>
-        ))}
-      </View>
-
-      {voiceStyle !== 'none' && (
-        <TouchableOpacity style={styles.previewButton} onPress={onPreviewTTS}>
-          <Text style={styles.previewButtonText}>🔊 Preview Selected TTS Style</Text>
-        </TouchableOpacity>
-      )}
-
-      {error && <Text style={styles.error}>{error}</Text>}
-
-      <TouchableOpacity
-        style={styles.primaryButton}
-        onPress={submit}
-        disabled={busy}
-      >
-        {busy ? (
-          <View style={{ flexDirection: 'row', alignItems: 'center' }}>
-            <ActivityIndicator color="#fff" style={{ marginRight: 8 }} />
-            <Text style={styles.primaryButtonText}>{busyStatus || 'Creating Nudgr...'}</Text>
-          </View>
-        ) : (
-          <Text style={styles.primaryButtonText}>Create Nudgr</Text>
-        )}
-      </TouchableOpacity>
-      <View style={{ marginTop: 12, marginBottom: 28 }}>
-        <Button title="Back" onPress={onBack} />
-      </View>
-    </ScrollView>
+        <View style={{ height: 40 }} />
+      </ScrollView>
     </View>
   );
 }
@@ -627,16 +711,17 @@ export default function CreateNudgeScreen({ connections, onCreated, onBack }) {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#f8fafc',
+    backgroundColor: THEME.colors.bg,
   },
   header: {
-    height: 52,
+    height: 54,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    backgroundColor: '#ffffff',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(7, 10, 18, 0.85)',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.07)',
+    borderBottomColor: THEME.colors.glassBorderSubtle,
     zIndex: 10,
   },
   headerTitleContainer: {
@@ -645,9 +730,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
-    color: '#1a1a1a',
+    color: THEME.colors.textPrimary,
     letterSpacing: -0.3,
   },
   backBtn: {
@@ -655,246 +740,416 @@ const styles = StyleSheet.create({
     height: 44,
     justifyContent: 'center',
     alignItems: 'center',
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
   },
   backArrow: {
-    fontSize: 32,
-    color: '#16a34a',
+    fontSize: 28,
+    color: THEME.colors.accentPrimary,
     fontWeight: '300',
-    lineHeight: 34,
+    lineHeight: 30,
   },
-  container: { padding: 16 },
-  heading: { fontSize: 22, fontWeight: 'bold', marginBottom: 12 },
-  label: { fontSize: 14, fontWeight: '600', color: '#555', marginTop: 12, marginBottom: 6 },
-  hint: { fontSize: 13, color: '#888', marginBottom: 6 },
-  input: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    fontSize: 16,
-    color: '#333',
-    textAlignVertical: 'top',
+  container: {
+    flex: 1,
   },
-  chip: {
-    backgroundColor: '#fff',
+  scrollContent: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 48,
+  },
+  formHeader: {
+    marginBottom: 20,
+  },
+  formTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: THEME.colors.textPrimary,
+    letterSpacing: -0.5,
+  },
+  formSubtitle: {
+    fontSize: 14,
+    color: THEME.colors.textSecondary,
+    marginTop: 4,
+    lineHeight: 20,
+  },
+
+  // --- Glass Panel Base ---
+  glassPanel: {
+    backgroundColor: THEME.colors.bgCard,
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 12,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: THEME.radius.card,
+    padding: 18,
+    marginBottom: 16,
+  },
+  panelLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: THEME.colors.textTertiary,
+    letterSpacing: 1.2,
+    marginBottom: 12,
+  },
+  panelSubLabel: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: THEME.colors.textTertiary,
+    letterSpacing: 1,
     marginBottom: 8,
   },
-  chipActive: { borderColor: '#2e7d32', backgroundColor: '#e8f5e9' },
-  chipText: { fontSize: 15, color: '#333' },
-  chipTextActive: { fontWeight: 'bold', color: '#1b5e20' },
-  secondaryButton: {
-    backgroundColor: '#e8f5e9',
-    borderRadius: 8,
-    paddingVertical: 12,
+
+  // --- Recipient Chips ---
+  recipientChip: {
+    flexDirection: 'row',
     alignItems: 'center',
-  },
-  secondaryButtonText: { color: '#2e7d32', fontWeight: '600' },
-  voiceNoteCard: {
-    backgroundColor: '#f8fafc',
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
     borderWidth: 1,
-    borderColor: '#e2e8f0',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderRadius: 16,
+    padding: 12,
+    marginBottom: 8,
+    gap: 12,
+  },
+  recipientChipActive: {
+    backgroundColor: 'rgba(139, 124, 255, 0.15)',
+    borderColor: THEME.colors.accentPrimary,
+  },
+  recipientAvatar: {
+    width: 36,
+    height: 36,
     borderRadius: 12,
-    padding: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  recipientAvatarText: {
+    fontSize: 16,
+    fontWeight: '700',
+  },
+  recipientName: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: THEME.colors.textPrimary,
+  },
+  recipientSub: {
+    fontSize: 12,
+    color: THEME.colors.textSecondary,
+    marginTop: 1,
+  },
+  textActive: {
+    color: '#ffffff',
+  },
+  checkIcon: {
+    color: THEME.colors.accentPrimary,
+    fontSize: 18,
+    fontWeight: '700',
+  },
+  hintText: {
+    fontSize: 12,
+    color: THEME.colors.textTertiary,
+    fontStyle: 'italic',
+  },
+
+  // --- Message Input ---
+  messageInput: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: 18,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 16,
+    color: THEME.colors.textPrimary,
+    minHeight: 90,
+    textAlignVertical: 'top',
+  },
+
+  // --- Location Controls ---
+  locationBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+    marginBottom: 10,
+  },
+  locationBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 8,
+  },
+  locationBtnActive: {
+    backgroundColor: 'rgba(139, 124, 255, 0.16)',
+    borderColor: THEME.colors.accentPrimary,
+  },
+  locationBtnIcon: {
+    fontSize: 14,
+  },
+  locationBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: THEME.colors.textPrimary,
+  },
+  locationSelectedBadge: {
+    backgroundColor: 'rgba(48, 209, 88, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(48, 209, 88, 0.3)',
+    borderRadius: 12,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    marginBottom: 8,
+  },
+  locationBadgeText: {
+    fontSize: 12,
+    color: '#86efac',
+    fontWeight: '600',
+  },
+
+  // --- Segmented Control ---
+  segmentedContainer: {
+    flexDirection: 'row',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 14,
+    padding: 3,
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.08)',
+    marginBottom: 12,
+  },
+  segmentBtn: {
+    flex: 1,
+    paddingVertical: 9,
+    alignItems: 'center',
+    borderRadius: 11,
+  },
+  segmentBtnActive: {
+    backgroundColor: THEME.colors.accentPrimary,
+    shadowColor: THEME.colors.accentPrimary,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  segmentText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: THEME.colors.textSecondary,
+  },
+  segmentTextActive: {
+    color: '#ffffff',
+    fontWeight: '700',
+  },
+  scheduleInfoBox: {
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    padding: 12,
+    borderRadius: 12,
+  },
+  scheduleInfoText: {
+    fontSize: 12,
+    color: THEME.colors.textSecondary,
+  },
+
+  // --- Voice Controls ---
+  voiceNoteBox: {
     marginBottom: 8,
   },
   recordButton: {
-    backgroundColor: '#0284c7',
-    borderRadius: 8,
-    paddingVertical: 12,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: 'rgba(90, 200, 250, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(90, 200, 250, 0.3)',
+    borderRadius: 14,
+    paddingVertical: 12,
+  },
+  recordButtonIcon: {
+    fontSize: 18,
   },
   recordButtonText: {
-    color: '#fff',
+    fontSize: 14,
     fontWeight: '700',
-    fontSize: 15,
-  },
-  voiceNoteHint: {
-    fontSize: 12,
-    color: '#64748b',
-    marginTop: 6,
-    textAlign: 'center',
-  },
-  recordingActiveContainer: {
-    alignItems: 'center',
-    paddingVertical: 8,
+    color: THEME.colors.accentSecondary,
   },
   recordingRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    justifyContent: 'space-between',
+    backgroundColor: 'rgba(255, 69, 58, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 69, 58, 0.3)',
+    borderRadius: 14,
+    padding: 12,
   },
   recordingDot: {
-    width: 12,
-    height: 12,
-    borderRadius: 6,
-    backgroundColor: '#ef4444',
-    marginRight: 8,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: THEME.colors.danger,
+    marginRight: 6,
   },
   recordingTimer: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: '#ef4444',
-  },
-  stopRecordButton: {
-    backgroundColor: '#ef4444',
-    borderRadius: 8,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-  },
-  stopRecordButtonText: {
-    color: '#fff',
-    fontWeight: '700',
-    fontSize: 15,
-  },
-  recordedContainer: {
-    paddingVertical: 4,
-  },
-  recordedTitle: {
     fontSize: 14,
-    fontWeight: '600',
-    color: '#16a34a',
-    marginBottom: 10,
-    textAlign: 'center',
+    fontWeight: '700',
+    color: '#ffffff',
+    flex: 1,
   },
-  voiceActionsRow: {
+  stopRecordBtn: {
+    backgroundColor: THEME.colors.danger,
+    paddingVertical: 6,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+  },
+  stopRecordText: {
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  recordedCard: {
+    backgroundColor: 'rgba(48, 209, 88, 0.10)',
+    borderWidth: 1,
+    borderColor: 'rgba(48, 209, 88, 0.25)',
+    borderRadius: 14,
+    padding: 12,
+  },
+  recordedLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#86efac',
+    marginBottom: 8,
+  },
+  recordedActionRow: {
     flexDirection: 'row',
     gap: 8,
   },
-  previewActionBtn: {
+  voiceActionBtn: {
     flex: 1,
-    backgroundColor: '#e0f2fe',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     borderWidth: 1,
-    borderColor: '#0284c7',
-    borderRadius: 8,
-    paddingVertical: 9,
+    borderColor: 'rgba(255, 255, 255, 0.14)',
+    borderRadius: 10,
+    paddingVertical: 8,
     alignItems: 'center',
   },
-  previewActionBtnText: {
-    color: '#0284c7',
+  voiceActionText: {
+    fontSize: 12,
     fontWeight: '700',
+    color: THEME.colors.textPrimary,
   },
-  reRecordBtn: {
-    flex: 1,
-    backgroundColor: '#f1f5f9',
-    borderWidth: 1,
-    borderColor: '#cbd5e1',
-    borderRadius: 8,
-    paddingVertical: 9,
-    alignItems: 'center',
-  },
-  reRecordBtnText: {
-    color: '#475569',
-    fontWeight: '600',
-  },
-  deleteVoiceBtn: {
-    flex: 1,
-    backgroundColor: '#fef2f2',
-    borderWidth: 1,
-    borderColor: '#fca5a5',
-    borderRadius: 8,
-    paddingVertical: 9,
-    alignItems: 'center',
-  },
-  deleteVoiceBtnText: {
-    color: '#dc2626',
-    fontWeight: '600',
+  deleteBtn: {
+    borderColor: 'rgba(255, 69, 58, 0.3)',
+    backgroundColor: 'rgba(255, 69, 58, 0.1)',
   },
   micErrorText: {
     fontSize: 12,
-    color: '#dc2626',
+    color: THEME.colors.danger,
     marginTop: 6,
   },
-  voiceGrid: { marginBottom: 6 },
-  voiceChip: {
-    backgroundColor: '#fff',
-    borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    padding: 10,
-    marginBottom: 6,
-  },
-  voiceChipActive: {
-    borderColor: '#2e7d32',
-    backgroundColor: '#e8f5e9',
-  },
-  voiceChipTitle: {
-    fontSize: 15,
-    fontWeight: '600',
-    color: '#333',
-  },
-  voiceChipTextActive: {
-    color: '#2e7d32',
-  },
-  voiceChipDesc: {
-    fontSize: 12,
-    color: '#777',
-    marginTop: 2,
-  },
-  previewButton: {
-    backgroundColor: '#f1f8e9',
-    borderColor: '#a5d6a7',
-    borderWidth: 1,
-    borderRadius: 8,
-    paddingVertical: 10,
-    alignItems: 'center',
-    marginTop: 4,
-    marginBottom: 8,
-  },
-  previewButtonText: {
-    color: '#2e7d32',
-    fontWeight: '600',
-    fontSize: 14,
-  },
-  primaryButton: {
-    backgroundColor: '#2e7d32',
-    borderRadius: 8,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: 16,
-  },
-  primaryButtonText: { color: '#fff', fontSize: 16, fontWeight: '600' },
-  error: { color: '#c62828', fontSize: 14, marginTop: 12 },
-  timeTestCard: {
-    backgroundColor: '#f0fdf4',
-    borderColor: '#22c55e',
-    borderWidth: 1.5,
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 16,
-  },
-  timeTestTitle: {
-    fontSize: 15,
-    fontWeight: '800',
-    color: '#15803d',
-    marginBottom: 4,
-  },
-  timeTestSubtitle: {
-    fontSize: 12,
-    color: '#4b5563',
-    lineHeight: 17,
-    marginBottom: 10,
-  },
-  timeTestBtnRow: {
+
+  // --- Voice Style Horizontal Cards ---
+  voiceStyleRow: {
     flexDirection: 'row',
     gap: 8,
+    paddingVertical: 4,
   },
-  timeTestBtn: {
-    flex: 1,
-    backgroundColor: '#16a34a',
-    borderRadius: 8,
+  voiceCard: {
+    width: 120,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: 14,
+    padding: 12,
+  },
+  voiceCardActive: {
+    backgroundColor: 'rgba(139, 124, 255, 0.18)',
+    borderColor: THEME.colors.accentPrimary,
+  },
+  voiceCardTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: THEME.colors.textPrimary,
+    marginBottom: 4,
+  },
+  voiceCardTitleActive: {
+    color: '#ffffff',
+  },
+  voiceCardDesc: {
+    fontSize: 11,
+    color: THEME.colors.textTertiary,
+    lineHeight: 14,
+  },
+  previewTtsBtn: {
+    marginTop: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: 12,
     paddingVertical: 10,
     alignItems: 'center',
   },
-  timeTestBtnText: {
-    color: '#ffffff',
+  previewTtsText: {
     fontSize: 13,
     fontWeight: '700',
+    color: THEME.colors.accentPrimary,
+  },
+
+  // --- Quick Test Panel ---
+  testSubtitle: {
+    fontSize: 12,
+    color: THEME.colors.textSecondary,
+    marginBottom: 10,
+    lineHeight: 16,
+  },
+  testBtnRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  testBtn: {
+    flex: 1,
+    backgroundColor: 'rgba(90, 200, 250, 0.14)',
+    borderWidth: 1,
+    borderColor: 'rgba(90, 200, 250, 0.3)',
+    borderRadius: 12,
+    paddingVertical: 10,
+    alignItems: 'center',
+  },
+  testBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: THEME.colors.accentSecondary,
+  },
+
+  // --- Submit & Error ---
+  errorBox: {
+    backgroundColor: 'rgba(255, 69, 58, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 69, 58, 0.3)',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 16,
+  },
+  errorText: {
+    fontSize: 13,
+    color: '#fca5a5',
+    fontWeight: '600',
+  },
+  submitButton: {
+    ...THEME.buttonPrimary,
+    borderRadius: THEME.radius.button,
+    marginTop: 8,
+  },
+  submitButtonText: {
+    fontSize: 17,
+    fontWeight: '800',
+    color: '#ffffff',
+    letterSpacing: 0.3,
+  },
+  busyRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
   },
 });

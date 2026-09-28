@@ -28,16 +28,10 @@ exports.sendNudgeOnTrigger = functions.firestore
     }
     const nudge = nudgeSnap.data();
 
-    // Check if already processed (idempotency)
-    if (triggerData.status === 'FCM_SENT' || triggerData.status === 'COMPLETED') {
-      return null;
-    }
+    
 
     const recipientUid = nudge.recipientUid;
     if (!recipientUid) return null;
-
-    // Update trigger event status to FCM_SENT (optimistic)
-    await snap.ref.update({ status: 'FCM_SENT', updatedAt: admin.firestore.FieldValue.serverTimestamp() });
 
     try {
       const userSnap = await admin
@@ -51,33 +45,48 @@ exports.sendNudgeOnTrigger = functions.firestore
       const tokens = Object.keys(fcmTokens).filter(Boolean);
 
       if (tokens.length === 0) {
-        functions.logger.info('No FCM tokens for recipient ' + recipientUid);
-        // Still mark as sent - recipient will get it via Firestore listener
+        functions.logger.warn(`[RECIPIENT_TOKEN_MISSING] recipientUid=${recipientUid} nudgeId=${nudgeId}`);
+        functions.logger.info('[NUDGR_DELIVERY] No FCM tokens for recipient ' + recipientUid + '; Firestore listener fallback is active');
         return null;
       }
 
+      functions.logger.info(`[RECIPIENT_TOKEN_FOUND] recipientUid=${recipientUid} tokenCount=${tokens.length} nudgeId=${nudgeId}`);
+
       const senderName = nudge.senderName || 'Someone';
       
-      // Send FCM with high priority and call-style notification
-      // We send data-only FCM and let the app handle showing the notification
-      // with the correct channel/category for call-style experience
+      // Send a high-priority FCM with BOTH a notification payload (so Android OS
+      // can display it natively when the app is killed/backgrounded) AND a data
+      // payload (so the JS handler can process Answer/Decline actions and route
+      // to the correct screen when the app is in the foreground).
+      //
+      // IMPORTANT: data-only FCM will NOT show a system notification when the
+      // React Native JS runtime is not running. Adding android.notification
+      // ensures the OS itself displays the heads-up notification.
+      const nudgeMessage = nudge.message || 'Incoming Nudgr';
       const payload = {
         data: {
           nudgeId: nudgeId,
           triggerEventId: context.params.triggerEventId,
           type: 'nudge_incoming',
-          senderName: senderName, // For notification content when app is background/killed
+          senderUid: nudge.senderUid || '',
+          recipientUid: recipientUid,
+          senderName: senderName,
+          message: nudgeMessage,
         },
         tokens,
         android: {
           priority: 'high',
           notification: {
-            title: 'Incoming Nudgr',
-            body: `From ${senderName}`,
-            channelId: 'nudgr_calls',
-            sound: 'ringtone.mp3',
-            color: '#2e7d32',
-            tag: nudgeId, // For deduplication
+            title: `Incoming Nudgr from ${senderName}`,
+            body: nudgeMessage,
+            channelId: 'nudgr_calls_v2',
+            sound: 'ringtone',
+            priority: 'max',
+            visibility: 'public',
+            tag: `nudgr_${nudgeId}`,
+            defaultSound: false,
+            defaultVibrateTimings: false,
+            vibrateTimingsMillis: [0, 800, 200, 800, 200, 800],
           },
         },
         apns: {
@@ -97,17 +106,41 @@ exports.sendNudgeOnTrigger = functions.firestore
         },
       };
 
-      await admin.messaging().sendEachForMulticast(payload);
-      functions.logger.info('FCM sent for nudge ' + nudgeId + ' to ' + tokens.length + ' tokens');
-      
+      functions.logger.info(`[FCM_SEND_STARTED] nudgeId=${nudgeId} recipientUid=${recipientUid} tokenCount=${tokens.length}`);
+      const sendResult = await admin.messaging().sendEachForMulticast(payload);
+      functions.logger.info(`[FCM_SEND_SUCCESS] nudgeId=${nudgeId} success=${sendResult.successCount}/${tokens.length} failures=${sendResult.failureCount}`);
+
+      // Clean up invalid/expired tokens
+      const tokensToRemove = [];
+      sendResult.responses.forEach((resp, idx) => {
+        if (!resp.success) {
+          const errCode = resp.error?.code || '';
+          functions.logger.warn(`[FCM_SEND_FAILURE] nudgeId=${nudgeId} tokenIndex=${idx} error=${errCode} message=${resp.error?.message || 'unknown'}`);
+          if (errCode === 'messaging/invalid-registration-token' ||
+              errCode === 'messaging/registration-token-not-registered') {
+            tokensToRemove.push(tokens[idx]);
+          }
+        }
+      });
+
+      // Remove stale tokens from Firestore
+      if (tokensToRemove.length > 0) {
+        const updates = {};
+        tokensToRemove.forEach(t => { updates[`fcmTokens.${t}`] = admin.firestore.FieldValue.delete(); });
+        await admin.firestore().collection('users').doc(recipientUid).update(updates);
+        functions.logger.info(`[FCM_TOKEN_CLEANUP] recipientUid=${recipientUid} removed=${tokensToRemove.length} stale tokens`);
+      }
+
       // Update trigger event to mark FCM sent
       await snap.ref.update({ 
         status: 'FCM_SENT', 
         fcmSentAt: admin.firestore.FieldValue.serverTimestamp(),
+        fcmSuccessCount: sendResult.successCount,
+        fcmFailureCount: sendResult.failureCount,
         updatedAt: admin.firestore.FieldValue.serverTimestamp() 
       });
     } catch (err) {
-      functions.logger.error('sendNudgeOnTrigger failed', err);
+      functions.logger.error(`[FCM_SEND_FAILURE] nudgeId=${nudgeId} error=${err.message}`, err);
       await snap.ref.update({ 
         status: 'FCM_FAILED', 
         error: err.message,
@@ -156,13 +189,14 @@ exports.updateNudgeOnTrigger = functions.firestore
 /**
  * Cloud Functions for Cloudflare R2 Presigned URLs
  */
-const { handleGetVoiceUploadUrl, handleGetVoiceDownloadUrl } = require('./r2');
+
 
 exports.getVoiceUploadUrl = functions.https.onRequest((req, res) => {
+  const { handleGetVoiceUploadUrl } = require('./r2');
   return handleGetVoiceUploadUrl(req, res);
 });
 
 exports.getVoiceDownloadUrl = functions.https.onRequest((req, res) => {
+  const { handleGetVoiceDownloadUrl } = require('./r2');
   return handleGetVoiceDownloadUrl(req, res);
 });
-

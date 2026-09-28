@@ -4,21 +4,28 @@ import {
   stopGeofences,
   evaluateSenderNudges,
 } from './backgroundGeofence';
-import { subscribeSentNudges, NUDGE_STATUS, isNudgeActive } from '../db/nudges';
+import {
+  subscribeSentNudges,
+  NUDGE_STATUS,
+  isNudgeActive,
+} from '../db/nudges';
 
 export * from './geoUtils';
 
 /**
- * Starts the geofence monitor for the SENDER'S active Nudgrs.
+ * Starts the geofence monitor for active Nudgrs sent by this device's user.
  * Uses OS-level geofencing (expo-location startGeofencingAsync) for background,
  * plus a foreground position watcher (watchPositionAsync) for real-time responsiveness
  * when moving while the app is open, and an immediate initial one-shot evaluation
- * so that stationary senders or senders already inside the radius trigger without delay.
+ * so that stationary users or users already inside the radius trigger without delay.
  */
 export function startTriggerEngine({ uid, onStatus }) {
   let stopped = false;
   let fgWatcherSub = null;
-  console.log('[GEOFENCE_DEBUG] Starting trigger engine for user:', uid);
+  let sentNudges = [];
+  let syncInProgress = false;
+  let pendingSync = false;
+  console.log(`[NUDGR_GEOFENCE_REGISTER] Starting sender geofence engine currentUserUid=${uid}`);
 
   const startForegroundWatcher = async (activeNudges) => {
     if (fgWatcherSub) {
@@ -49,20 +56,25 @@ export function startTriggerEngine({ uid, onStatus }) {
     }
   };
 
-  // Subscribe to sender's active nudges and register geofences
-  const unsub = subscribeSentNudges(uid, async (nudges) => {
+  const syncGeofences = async () => {
     if (stopped) return;
 
+    // Only the sender's device owns the physical geofence for a Nudgr.
+    const allNudges = sentNudges.filter((n) => n?.id && n.senderUid === uid);
+
     // Filter for ACTIVE or SCHEDULED nudges that are currently enabled (isNudgeActive)
-    const activeNudges = nudges.filter(
-      n => (n.status === NUDGE_STATUS.ACTIVE || n.status === NUDGE_STATUS.SCHEDULED) &&
-           isNudgeActive(n) &&
-           typeof n.triggerLatitude === 'number' &&
-           typeof n.triggerLongitude === 'number' &&
-           typeof n.radiusKm === 'number'
+    const activeNudges = allNudges.filter(
+      (n) =>
+        (n.status === NUDGE_STATUS.ACTIVE || n.status === NUDGE_STATUS.SCHEDULED) &&
+        isNudgeActive(n) &&
+        typeof n.triggerLatitude === 'number' &&
+        typeof n.triggerLongitude === 'number' &&
+        typeof n.radiusKm === 'number'
     );
 
-    console.log(`[NUDGR_DIAG] Sent nudges subscription updated. Total: ${nudges.length}, Active & Enabled for geofencing: ${activeNudges.length}`);
+    console.log(
+      `[NUDGR_GEOFENCE_REGISTER] Sync currentUserUid=${uid} sent=${allNudges.length} active=${activeNudges.length}`
+    );
 
     if (activeNudges.length === 0) {
       if (onStatus) onStatus('no-active-nudges');
@@ -76,7 +88,7 @@ export function startTriggerEngine({ uid, onStatus }) {
 
     const result = await registerGeofencesForNudges(activeNudges);
     if (result.success > 0) {
-      console.log('[GEOFENCE_DEBUG] Geofence monitoring active for', result.success, 'nudges');
+      console.log(`[NUDGR_GEOFENCE_REGISTER] currentUserUid=${uid} registered=${result.success}`);
       if (onStatus) onStatus('monitoring-geofence', result.success);
     } else if (onStatus) {
       console.warn('[GEOFENCE_DEBUG] Geofence registration failed:', result.reason);
@@ -87,7 +99,7 @@ export function startTriggerEngine({ uid, onStatus }) {
     await startForegroundWatcher(activeNudges);
 
     // Immediately evaluate current position against active nudges
-    // (Essential for when sender is already inside radius or stationary at creation)
+    // (Essential for when user is already inside radius or stationary at creation)
     (async () => {
       try {
         let initialLoc = null;
@@ -97,14 +109,44 @@ export function startTriggerEngine({ uid, onStatus }) {
           initialLoc = await Location.getLastKnownPositionAsync();
         }
         if (!stopped && initialLoc?.coords) {
-          console.log(`[TRIGGER_DIAG] Immediate initial location evaluation on engine start:\nlat=${initialLoc.coords.latitude}, lon=${initialLoc.coords.longitude}`);
+          console.log(
+            `[TRIGGER_DIAG] Immediate initial location evaluation on engine start:\nlat=${initialLoc.coords.latitude}, lon=${initialLoc.coords.longitude}`
+          );
           await evaluateSenderNudges(initialLoc.coords);
         }
       } catch (err) {
         console.warn('[TRIGGER_DIAG] Initial position check error:', err.message);
       }
     })();
-  });
+  };
+
+  const queueSync = async () => {
+    if (stopped) return;
+    if (syncInProgress) {
+      pendingSync = true;
+      return;
+    }
+    syncInProgress = true;
+    try {
+      await syncGeofences();
+    } finally {
+      syncInProgress = false;
+      if (pendingSync && !stopped) {
+        pendingSync = false;
+        await queueSync();
+      }
+    }
+  };
+
+  const unsubSent = subscribeSentNudges(
+    uid,
+    async (nudges) => {
+      if (stopped) return;
+      sentNudges = nudges || [];
+      await queueSync();
+    },
+    (err) => console.warn('[triggerEngine] sent nudges subscription error:', err?.message)
+  );
 
   return function stop() {
     stopped = true;
@@ -113,7 +155,7 @@ export function startTriggerEngine({ uid, onStatus }) {
       fgWatcherSub.remove();
       fgWatcherSub = null;
     }
-    unsub();
+    if (unsubSent) unsubSent();
     stopGeofences();
   };
 }

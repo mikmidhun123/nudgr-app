@@ -8,8 +8,10 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  StatusBar,
 } from 'react-native';
 import { getAuth } from '../firebase';
+import { THEME } from './theme';
 
 const AUTH_ERRORS = {
   'auth/invalid-email': 'Please enter a valid email address.',
@@ -70,15 +72,26 @@ export default function AuthScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Text style={styles.title}>Nudgr</Text>
-      <Text style={styles.subtitle}>{isSignup ? 'Create an account' : 'Sign in to connect'}</Text>
+      <StatusBar barStyle="light-content" backgroundColor={THEME.colors.bg} />
+
+      <View style={styles.brandBox}>
+        <View style={styles.logoBadge}>
+          <Text style={styles.logoBadgeText}>N</Text>
+        </View>
+        <Text style={styles.title}>
+          Nudgr<Text style={styles.titleDot}>.</Text>
+        </Text>
+        <Text style={styles.subtitle}>
+          {isSignup ? 'Create an account to start connecting' : 'Welcome back'}
+        </Text>
+      </View>
 
       <View style={styles.card}>
         {isSignup && (
           <TextInput
             style={styles.input}
-            placeholder="Name *"
-            placeholderTextColor="#999"
+            placeholder="Your name"
+            placeholderTextColor={THEME.colors.textTertiary}
             value={displayName}
             onChangeText={setDisplayName}
             autoCapitalize="words"
@@ -87,8 +100,8 @@ export default function AuthScreen() {
         )}
         <TextInput
           style={styles.input}
-          placeholder="Email *"
-          placeholderTextColor="#999"
+          placeholder="Email address"
+          placeholderTextColor={THEME.colors.textTertiary}
           value={email}
           onChangeText={setEmail}
           autoCapitalize="none"
@@ -97,26 +110,36 @@ export default function AuthScreen() {
         />
         <TextInput
           style={styles.input}
-          placeholder="Password *"
-          placeholderTextColor="#999"
+          placeholder="Password"
+          placeholderTextColor={THEME.colors.textTertiary}
           value={password}
           onChangeText={setPassword}
           secureTextEntry
         />
 
-        {error && <Text style={styles.error}>{error}</Text>}
+        {error && (
+          <View style={styles.errorBox}>
+            <Text style={styles.errorText}>{error}</Text>
+          </View>
+        )}
 
-        <TouchableOpacity style={styles.primaryButton} onPress={submit} disabled={busy}>
+        <TouchableOpacity
+          style={[styles.primaryButton, busy && styles.btnDisabled]}
+          onPress={submit}
+          disabled={busy}
+          activeOpacity={0.85}
+        >
           {busy ? (
-            <ActivityIndicator color="#fff" />
+            <ActivityIndicator color="#ffffff" />
           ) : (
-            <Text style={styles.primaryButtonText}>{isSignup ? 'Sign Up' : 'Sign In'}</Text>
+            <Text style={styles.primaryButtonText}>{isSignup ? 'Create Account' : 'Sign In'}</Text>
           )}
         </TouchableOpacity>
 
-        <TouchableOpacity onPress={switchMode} disabled={busy}>
+        <TouchableOpacity onPress={switchMode} disabled={busy} style={styles.switchBtn} activeOpacity={0.7}>
           <Text style={styles.switchText}>
-            {isSignup ? 'Already have an account? Sign in' : 'No account? Sign up'}
+            {isSignup ? 'Already have an account? ' : "Don't have an account? "}
+            <Text style={styles.switchHighlight}>{isSignup ? 'Sign in' : 'Sign up'}</Text>
           </Text>
         </TouchableOpacity>
       </View>
@@ -127,58 +150,113 @@ export default function AuthScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#fff',
-    padding: 20,
+    backgroundColor: THEME.colors.bg,
+    padding: 24,
     justifyContent: 'center',
   },
-  title: {
+  brandBox: {
+    alignItems: 'center',
+    marginBottom: 28,
+  },
+  logoBadge: {
+    width: 56,
+    height: 56,
+    borderRadius: 18,
+    backgroundColor: THEME.colors.accentPrimary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+    shadowColor: THEME.colors.accentPrimary,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.45,
+    shadowRadius: 14,
+    elevation: 8,
+  },
+  logoBadgeText: {
     fontSize: 28,
-    fontWeight: 'bold',
-    marginBottom: 8,
-    textAlign: 'center',
+    fontWeight: '900',
+    color: '#ffffff',
+    letterSpacing: -1,
+  },
+  title: {
+    fontSize: 34,
+    fontWeight: '800',
+    color: THEME.colors.textPrimary,
+    letterSpacing: -0.8,
+  },
+  titleDot: {
+    color: THEME.colors.accentPrimary,
   },
   subtitle: {
-    fontSize: 16,
-    color: '#666',
-    marginBottom: 20,
+    fontSize: 14,
+    color: THEME.colors.textSecondary,
+    marginTop: 6,
     textAlign: 'center',
   },
   card: {
-    backgroundColor: '#f8f9fa',
-    padding: 16,
-    borderRadius: 8,
+    backgroundColor: THEME.colors.bgCard,
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: THEME.radius.cardLg,
+    padding: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.4,
+    shadowRadius: 20,
+    elevation: 6,
   },
   input: {
-    backgroundColor: '#fff',
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
     borderWidth: 1,
-    borderColor: '#ddd',
-    borderRadius: 8,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     fontSize: 16,
-    color: '#333',
-    marginBottom: 12,
+    color: THEME.colors.textPrimary,
+    marginBottom: 14,
   },
-  error: {
-    color: '#c62828',
-    fontSize: 14,
-    marginBottom: 12,
+  errorBox: {
+    backgroundColor: 'rgba(255, 69, 58, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 69, 58, 0.3)',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 14,
+  },
+  errorText: {
+    color: '#fca5a5',
+    fontSize: 13,
+    textAlign: 'center',
+    fontWeight: '500',
   },
   primaryButton: {
-    backgroundColor: '#2e7d32',
-    borderRadius: 8,
-    paddingVertical: 12,
-    alignItems: 'center',
-    marginBottom: 12,
+    ...THEME.buttonPrimary,
+    borderRadius: 16,
+    paddingVertical: 15,
+    marginTop: 4,
+    marginBottom: 16,
+  },
+  btnDisabled: {
+    opacity: 0.5,
   },
   primaryButtonText: {
-    color: '#fff',
+    color: '#ffffff',
     fontSize: 16,
-    fontWeight: '600',
+    fontWeight: '800',
+    letterSpacing: 0.2,
+  },
+  switchBtn: {
+    paddingVertical: 6,
+    alignItems: 'center',
   },
   switchText: {
-    color: '#2e7d32',
+    color: THEME.colors.textSecondary,
     fontSize: 14,
     textAlign: 'center',
+  },
+  switchHighlight: {
+    color: THEME.colors.accentSecondary,
+    fontWeight: '700',
   },
 });

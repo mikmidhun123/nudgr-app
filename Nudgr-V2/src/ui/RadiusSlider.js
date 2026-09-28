@@ -5,11 +5,12 @@ import {
   RADIUS_MAX_KM,
   RADIUS_DEFAULT_KM,
 } from '../location/triggerEngine';
+import { THEME } from './theme';
 
 const STEP_KM = 0.1;
 
 /**
- * Smooth, precise, user-controlled trigger radius slider.
+ * Smooth, precise, user-controlled trigger radius slider in iPhone Glass style.
  * Range: 2.5 km (min) … 10.0 km (max), 0.1 km fine increments.
  */
 export default function RadiusSlider({ value, onChange }) {
@@ -89,8 +90,13 @@ export default function RadiusSlider({ value, onChange }) {
   return (
     <View style={styles.container}>
       <View style={styles.headerRow}>
-        <Text style={styles.label}>Trigger radius</Text>
-        <Text style={styles.valueBadge}>{clampedCurrent.toFixed(1)} km</Text>
+        <View>
+          <Text style={styles.label}>TRIGGER RADIUS</Text>
+          <Text style={styles.sublabel}>Distance from arrival target</Text>
+        </View>
+        <View style={styles.valueBadge}>
+          <Text style={styles.valueText}>{clampedCurrent.toFixed(1)} km</Text>
+        </View>
       </View>
 
       <View style={styles.sliderRow}>
@@ -130,7 +136,7 @@ export default function RadiusSlider({ value, onChange }) {
 
       <View style={styles.boundRow}>
         <Text style={styles.boundText}>{RADIUS_MIN_KM.toFixed(1)} km</Text>
-        <Text style={styles.hintText}>Drag smoothly (0.1 km precision)</Text>
+        <Text style={styles.hintText}>Smooth 0.1 km precision</Text>
         <Text style={styles.boundText}>{RADIUS_MAX_KM.toFixed(1)} km</Text>
       </View>
     </View>
@@ -139,62 +145,73 @@ export default function RadiusSlider({ value, onChange }) {
 
 const styles = StyleSheet.create({
   container: {
-    marginVertical: 10,
-    backgroundColor: '#fff',
-    borderRadius: 10,
+    marginVertical: 12,
+    backgroundColor: THEME.colors.bgCard,
+    borderRadius: THEME.radius.card,
     borderWidth: 1,
-    borderColor: '#e0e0e0',
-    padding: 12,
+    borderColor: THEME.colors.glassBorder,
+    padding: 16,
   },
   headerRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 14,
   },
   label: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#333',
+    fontSize: 11,
+    fontWeight: '800',
+    color: THEME.colors.textSecondary,
+    letterSpacing: 1.2,
+  },
+  sublabel: {
+    fontSize: 12,
+    color: THEME.colors.textTertiary,
+    marginTop: 2,
   },
   valueBadge: {
-    fontSize: 17,
-    fontWeight: 'bold',
-    color: '#2e7d32',
-    backgroundColor: '#e8f5e9',
-    paddingHorizontal: 10,
-    paddingVertical: 3,
-    borderRadius: 8,
+    backgroundColor: 'rgba(139, 124, 255, 0.18)',
+    borderWidth: 1,
+    borderColor: 'rgba(139, 124, 255, 0.40)',
+    paddingHorizontal: 12,
+    paddingVertical: 5,
+    borderRadius: THEME.radius.pill,
+  },
+  valueText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#ffffff',
+    letterSpacing: 0.2,
   },
   sliderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 6,
+    paddingVertical: 8,
   },
   quickStepBtn: {
-    backgroundColor: '#f1f8e9',
-    borderColor: '#c8e6c9',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: 'rgba(255, 255, 255, 0.14)',
     borderWidth: 1,
-    borderRadius: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 8,
+    borderRadius: 12,
+    paddingVertical: 8,
+    paddingHorizontal: 10,
   },
   quickStepText: {
     fontSize: 12,
     fontWeight: '700',
-    color: '#2e7d32',
+    color: THEME.colors.accentSecondary,
   },
   touchArea: {
     flex: 1,
-    height: 38,
+    height: 40,
     justifyContent: 'center',
-    paddingHorizontal: 12,
+    paddingHorizontal: 14,
   },
   track: {
     position: 'relative',
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#c8e6c9',
+    backgroundColor: 'rgba(255, 255, 255, 0.12)',
     justifyContent: 'center',
   },
   fill: {
@@ -203,37 +220,37 @@ const styles = StyleSheet.create({
     top: 0,
     bottom: 0,
     borderRadius: 4,
-    backgroundColor: '#2e7d32',
+    backgroundColor: THEME.colors.accentPrimary,
   },
   thumb: {
     position: 'absolute',
-    width: 26,
-    height: 26,
-    borderRadius: 13,
-    backgroundColor: '#2e7d32',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#ffffff',
     borderWidth: 3,
-    borderColor: '#ffffff',
-    marginLeft: -13,
-    top: -9,
-    elevation: 4,
+    borderColor: THEME.colors.accentPrimary,
+    marginLeft: -12,
+    top: -8,
+    elevation: 6,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.4,
+    shadowRadius: 5,
   },
   boundRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 2,
+    marginTop: 4,
   },
   boundText: {
-    fontSize: 12,
-    color: '#888',
-    fontWeight: '500',
+    fontSize: 11,
+    color: THEME.colors.textTertiary,
+    fontWeight: '600',
   },
   hintText: {
     fontSize: 11,
-    color: '#aaa',
+    color: THEME.colors.textTertiary,
   },
 });

@@ -10,3 +10,9 @@ build/
 # OS
 .DS_Store
 Thumbs.db
+
+# Local agent configuration
+.agent/
+GEMINI.md
+GEMINI*.md
+

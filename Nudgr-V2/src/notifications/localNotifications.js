@@ -1,11 +1,17 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
 export const NUDGR_ALERTS_CHANNEL_ID = 'nudgr_alerts';
-export const NUDGR_CALLS_CHANNEL_ID = 'nudgr_calls';
+// Android channel sound settings are immutable after first creation. The v2 id
+// ensures devices that previously created nudgr_calls with a bad sound get the
+// corrected ringtone configuration.
+export const NUDGR_CALLS_CHANNEL_ID = 'nudgr_calls_v2';
 export const NUDGR_DEFAULT_CHANNEL_ID = 'default';
 export const NUDGR_TEST_CHANNEL_ID = 'nudgr-test';
 export const NUDGR_INCOMING_CATEGORY = 'nudgr_incoming';
+const INCOMING_NOTIFICATION_KEY_PREFIX = '@nudgr_incoming_notification:';
+const incomingNotificationInFlight = new Map();
 
 // Configure the notification handler to ensure notifications appear when app is in foreground
 Notifications.setNotificationHandler({
@@ -16,7 +22,6 @@ Notifications.setNotificationHandler({
       shouldShowAlert: true,
       shouldPlaySound: true,
       shouldSetBadge: true,
-      priority: Notifications.AndroidNotificationPriority.MAX,
     };
   },
   handleSuccess: (notificationId) => {
@@ -150,7 +155,9 @@ export async function setupNotificationChannels() {
         identifier: 'DECLINE',
         buttonTitle: 'Decline',
         options: {
-          opensAppToForeground: false,
+          // Foregrounding ensures the response handler can clear the
+          // notification/state even when Android reclaimed the app process.
+          opensAppToForeground: true,
         },
       },
     ]);
@@ -222,38 +229,73 @@ export async function showIncomingNudgeNotification({ nudgeId, senderName, messa
   const title = `Incoming Nudgr from ${name}`;
   const body = message || 'Tap to answer or listen to your voice message';
 
-  console.log('[NOTIFICATION_DEBUG] Scheduling incoming call-style notification for:', nudgeId);
-
-  try {
-    const perm = await checkAndRequestNotificationPermissions();
-    if (!perm.granted) {
-      console.warn('[NOTIFICATION_DEBUG] Cannot show incoming notification: permission denied');
-    }
-
-    const id = await Notifications.scheduleNotificationAsync({
-      content: {
-        title,
-        body,
-        data: {
-          nudgeId,
-          type: 'nudge_incoming',
-        },
-        sound: 'ringtone.mp3',
-        priority: Notifications.AndroidNotificationPriority.MAX,
-        color: '#2e7d32',
-        channelId: NUDGR_CALLS_CHANNEL_ID,
-        categoryIdentifier: NUDGR_INCOMING_CATEGORY,
-        sticky: false,
-      },
-      trigger: null, // Deliver immediately
-    });
-
-    console.log('[NOTIFICATION_DEBUG] Incoming call notification scheduled. Notification ID:', id);
-    return id;
-  } catch (e) {
-    console.error('[NOTIFICATION_DEBUG] Failed to schedule incoming call notification:', e.message, e);
-    return null;
+  const markerKey = `${INCOMING_NOTIFICATION_KEY_PREFIX}${nudgeId}`;
+  const existing = await AsyncStorage.getItem(markerKey).catch(() => null);
+  if (existing) {
+    console.log(`[NUDGR_NOTIFICATION] nudgeId=${nudgeId} result=DEDUPLICATED notificationId=${existing}`);
+    return existing;
   }
+
+  if (incomingNotificationInFlight.has(nudgeId)) {
+    return incomingNotificationInFlight.get(nudgeId);
+  }
+
+  const operation = (async () => {
+    try {
+      console.log(`[NUDGR_NOTIFICATION] nudgeId=${nudgeId} senderName=${name} result=START`);
+
+      // Ensure channels exist (safe to call in headless context)
+      await setupNotificationChannels();
+
+      // NON-BLOCKING permission check: use getPermissionsAsync() instead of
+      // requestPermissionsAsync(). In a headless/background JS context (FCM
+      // background handler), requestPermissionsAsync() will hang or fail because
+      // there is no UI to display the permission dialog. The permission will
+      // have been granted when the app was active. If it hasn't been granted,
+      // we still attempt to schedule — the OS will silently drop it, which is
+      // better than crashing the headless handler.
+      try {
+        const perm = await Notifications.getPermissionsAsync();
+        if (!perm.granted && perm.status !== 'granted') {
+          console.warn(`[NUDGR_NOTIFICATION] nudgeId=${nudgeId} result=PERMISSION_NOT_GRANTED (status=${perm.status}), attempting anyway`);
+        }
+      } catch (permErr) {
+        // In headless context, even getPermissionsAsync might throw — proceed anyway
+        console.warn(`[NUDGR_NOTIFICATION] nudgeId=${nudgeId} permission check error: ${permErr.message}, proceeding`);
+      }
+
+      const id = await Notifications.scheduleNotificationAsync({
+        content: {
+          title,
+          body,
+          data: {
+            nudgeId,
+            senderName: name,
+            type: 'nudge_incoming',
+          },
+          sound: 'ringtone.mp3',
+          priority: Notifications.AndroidNotificationPriority.MAX,
+          color: '#2e7d32',
+          channelId: NUDGR_CALLS_CHANNEL_ID,
+          categoryIdentifier: NUDGR_INCOMING_CATEGORY,
+          sticky: false,
+        },
+        trigger: null, // Deliver immediately
+      });
+
+      await AsyncStorage.setItem(markerKey, id).catch(() => {});
+      console.log(`[NUDGR_NOTIFICATION] nudgeId=${nudgeId} result=SUCCESS notificationId=${id} channel=${NUDGR_CALLS_CHANNEL_ID}`);
+      return id;
+    } catch (e) {
+      console.error(`[NUDGR_NOTIFICATION] nudgeId=${nudgeId} result=FAILED error=${e.message}`);
+      return null;
+    } finally {
+      incomingNotificationInFlight.delete(nudgeId);
+    }
+  })();
+
+  incomingNotificationInFlight.set(nudgeId, operation);
+  return operation;
 }
 
 /**
@@ -669,4 +711,3 @@ export async function syncAllNudgeAlarms(nudges = [], isNudgeActiveFn) {
     }
   }
 }
-

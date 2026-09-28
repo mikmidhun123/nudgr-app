@@ -26,8 +26,9 @@ export async function syncFcmToken(firebaseUser) {
       [`fcmTokens.${token}`]: true,
       updatedAt: getServerTimestamp(),
     }, { merge: true });
+    console.log(`[FCM_TOKEN] Token synced to Firestore uid=${uid} tokenPrefix=${token.substring(0, 8)}...`);
   } catch (e) {
-    if (__DEV__) console.warn('[syncFcmToken]', e.message);
+    console.warn(`[FCM_TOKEN] syncFcmToken FAILED uid=${uid} error=${e.message}`);
   }
 }
 

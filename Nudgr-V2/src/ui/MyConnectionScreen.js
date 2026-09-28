@@ -7,13 +7,13 @@ import {
   TouchableOpacity,
   TextInput,
   ActivityIndicator,
-  Alert,
   StatusBar,
 } from 'react-native';
 import * as Clipboard from 'expo-clipboard';
 import { getAuth } from '../firebase';
 import { ensureUserProfile, subscribeUserProfile } from '../db/users';
 import { connectByCode } from '../db/connections';
+import { THEME } from './theme';
 
 export default function MyConnectionScreen({ uid, email, displayName, connections = [], onBack }) {
   const [profile, setProfile] = useState(null);
@@ -49,7 +49,6 @@ export default function MyConnectionScreen({ uid, email, displayName, connection
   }, [uid, email, displayName]);
 
   useEffect(() => {
-    // Always reset visibility on mount
     setCodeVisible(false);
     loadOrGenerateCode();
 
@@ -99,11 +98,10 @@ export default function MyConnectionScreen({ uid, email, displayName, connection
 
   return (
     <View style={styles.screen}>
+      <StatusBar barStyle="light-content" backgroundColor={THEME.colors.bg} />
+
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerTitleContainer} pointerEvents="none">
-          <Text style={styles.headerTitle}>My Connection</Text>
-        </View>
         <TouchableOpacity
           onPress={onBack}
           style={styles.backBtn}
@@ -112,6 +110,10 @@ export default function MyConnectionScreen({ uid, email, displayName, connection
         >
           <Text style={styles.backArrow}>‹</Text>
         </TouchableOpacity>
+        <View style={styles.headerTitleContainer} pointerEvents="none">
+          <Text style={styles.headerTitle}>My Connection</Text>
+        </View>
+        <View style={{ width: 44 }} />
       </View>
 
       <ScrollView
@@ -119,21 +121,28 @@ export default function MyConnectionScreen({ uid, email, displayName, connection
         showsVerticalScrollIndicator={false}
         keyboardShouldPersistTaps="handled"
       >
-        {/* My Connection Code Card */}
+        <View style={styles.topSection}>
+          <Text style={styles.pageTitle}>Connections</Text>
+          <Text style={styles.pageSubtitle}>
+            Pair with family and friends to send & receive arrival Nudgrs.
+          </Text>
+        </View>
+
+        {/* 1. My Connection Code Floating Glass Card */}
         <View style={styles.glassCard}>
           <Text style={styles.sectionLabel}>YOUR CONNECTION CODE</Text>
           <Text style={styles.sectionHint}>
-            Share this code with someone so they can connect with you.
+            Share this 8-character code with someone so they can send you reminders.
           </Text>
 
           {loading ? (
             <View style={styles.loadingBox}>
-              <ActivityIndicator color="#16a34a" style={{ marginVertical: 8 }} />
-              <Text style={styles.loadingText}>Loading your connection code...</Text>
+              <ActivityIndicator color={THEME.colors.accentPrimary} style={{ marginVertical: 8 }} />
+              <Text style={styles.loadingText}>Generating your connection code…</Text>
             </View>
           ) : code ? (
             <>
-              <View style={styles.codeRow}>
+              <View style={styles.codeContainer}>
                 <Text style={styles.codeText} selectable={false}>
                   {codeVisible ? code : maskedCode}
                 </Text>
@@ -147,7 +156,7 @@ export default function MyConnectionScreen({ uid, email, displayName, connection
               </View>
 
               <TouchableOpacity style={styles.copyBtn} onPress={copyCode} activeOpacity={0.8}>
-                <Text style={styles.copyBtnText}>{copied ? '✓ Copied!' : '📋 Copy Code'}</Text>
+                <Text style={styles.copyBtnText}>{copied ? '✓ Copied to Clipboard!' : '📋 Copy Code'}</Text>
               </TouchableOpacity>
             </>
           ) : (
@@ -160,17 +169,17 @@ export default function MyConnectionScreen({ uid, email, displayName, connection
           )}
         </View>
 
-        {/* Connect to Someone Card */}
+        {/* 2. Connect to Someone Floating Glass Card */}
         <View style={styles.glassCard}>
-          <Text style={styles.sectionLabel}>CONNECT TO SOMEONE</Text>
+          <Text style={styles.sectionLabel}>ENTER SOMEONE'S CODE</Text>
           <Text style={styles.sectionHint}>
-            Enter the connection code you received from the other person.
+            Paste the code you received from the other device.
           </Text>
 
           <TextInput
             style={styles.codeInput}
             placeholder="e.g. AB3XYZK9"
-            placeholderTextColor="#9ca3af"
+            placeholderTextColor={THEME.colors.textTertiary}
             value={connectCode}
             onChangeText={(t) => {
               setConnectCode(t.toUpperCase());
@@ -182,9 +191,16 @@ export default function MyConnectionScreen({ uid, email, displayName, connection
             maxLength={8}
           />
 
-          {connectError && <Text style={styles.connectErrorText}>{connectError}</Text>}
+          {connectError && (
+            <View style={styles.alertError}>
+              <Text style={styles.alertErrorText}>{connectError}</Text>
+            </View>
+          )}
+
           {connectSuccess && (
-            <Text style={styles.connectSuccessText}>✓ Connected successfully!</Text>
+            <View style={styles.alertSuccess}>
+              <Text style={styles.alertSuccessText}>✓ Connected successfully!</Text>
+            </View>
           )}
 
           <TouchableOpacity
@@ -197,34 +213,47 @@ export default function MyConnectionScreen({ uid, email, displayName, connection
             activeOpacity={0.8}
           >
             {connecting ? (
-              <ActivityIndicator color="#fff" size="small" />
+              <ActivityIndicator color="#ffffff" size="small" />
             ) : (
-              <Text style={styles.connectBtnText}>Connect</Text>
+              <Text style={styles.connectBtnText}>Connect Peer</Text>
             )}
           </TouchableOpacity>
         </View>
 
-        {/* Connected People */}
+        {/* 3. Connected People List */}
+        <Text style={styles.sectionHeader}>PAIRED PEOPLE ({connections.length})</Text>
         <View style={styles.glassCard}>
-          <Text style={styles.sectionLabel}>CONNECTED PEOPLE</Text>
           {connections.length === 0 ? (
-            <Text style={styles.emptyText}>No connections yet.</Text>
+            <View style={styles.emptyContainer}>
+              <Text style={styles.emptyIcon}>🔗</Text>
+              <Text style={styles.emptyTitle}>No connections yet</Text>
+              <Text style={styles.emptySubtitle}>
+                Share your code above or enter someone's code to get started.
+              </Text>
+            </View>
           ) : (
-            connections.map((c) => (
-              <View key={c.otherUid} style={styles.connectionItem}>
-                <View style={styles.connectionAvatar}>
-                  <Text style={styles.connectionAvatarText}>
-                    {(c.profile?.displayName || c.profile?.email || '?')[0].toUpperCase()}
-                  </Text>
+            connections.map((c, index) => {
+              const name = c.profile?.displayName || c.profile?.email || c.otherUid;
+              return (
+                <View key={c.otherUid}>
+                  {index > 0 && <View style={styles.connectionDivider} />}
+                  <View style={styles.connectionItem}>
+                    <View style={styles.connectionAvatar}>
+                      <Text style={styles.connectionAvatarText}>
+                        {name[0].toUpperCase()}
+                      </Text>
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.connectionName}>{name}</Text>
+                      <Text style={styles.connectionStatus}>{c.status || 'Active'}</Text>
+                    </View>
+                    <View style={styles.connectedBadge}>
+                      <Text style={styles.connectedBadgeText}>PAIRED</Text>
+                    </View>
+                  </View>
                 </View>
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.connectionName}>
-                    {c.profile?.displayName || c.profile?.email || c.otherUid}
-                  </Text>
-                  <Text style={styles.connectionStatus}>{c.status}</Text>
-                </View>
-              </View>
-            ))
+              );
+            })
           )}
         </View>
 
@@ -234,31 +263,20 @@ export default function MyConnectionScreen({ uid, email, displayName, connection
   );
 }
 
-const GLASS = {
-  backgroundColor: 'rgba(255,255,255,0.88)',
-  borderWidth: 1,
-  borderColor: 'rgba(0,0,0,0.07)',
-  borderRadius: 20,
-  shadowColor: '#000',
-  shadowOffset: { width: 0, height: 2 },
-  shadowOpacity: 0.07,
-  shadowRadius: 8,
-  elevation: 3,
-};
-
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#f0f4f0',
+    backgroundColor: THEME.colors.bg,
   },
   header: {
-    height: 52,
+    height: 54,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    backgroundColor: '#ffffff',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(7, 10, 18, 0.85)',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.07)',
+    borderBottomColor: THEME.colors.glassBorderSubtle,
     zIndex: 10,
   },
   headerTitleContainer: {
@@ -267,9 +285,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
-    color: '#1a1a1a',
+    color: THEME.colors.textPrimary,
     letterSpacing: -0.3,
   },
   backBtn: {
@@ -277,171 +295,280 @@ const styles = StyleSheet.create({
     height: 44,
     justifyContent: 'center',
     alignItems: 'center',
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
   },
   backArrow: {
-    fontSize: 32,
-    color: '#16a34a',
+    fontSize: 28,
+    color: THEME.colors.accentPrimary,
     fontWeight: '300',
-    lineHeight: 34,
+    lineHeight: 30,
   },
   scrollContainer: {
-    padding: 16,
-    paddingTop: 20,
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 40,
   },
+  topSection: {
+    marginBottom: 20,
+  },
+  pageTitle: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: THEME.colors.textPrimary,
+    letterSpacing: -0.5,
+  },
+  pageSubtitle: {
+    fontSize: 14,
+    color: THEME.colors.textSecondary,
+    marginTop: 4,
+    lineHeight: 20,
+  },
+  sectionHeader: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: THEME.colors.textTertiary,
+    letterSpacing: 1.2,
+    marginBottom: 10,
+    marginLeft: 4,
+  },
+
+  // --- Glass Card ---
   glassCard: {
-    ...GLASS,
-    padding: 18,
-    marginBottom: 14,
+    backgroundColor: THEME.colors.bgCard,
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: THEME.radius.card,
+    padding: 20,
+    marginBottom: 18,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.3,
+    shadowRadius: 12,
+    elevation: 4,
   },
   sectionLabel: {
     fontSize: 11,
-    fontWeight: '700',
-    color: '#9ca3af',
+    fontWeight: '800',
+    color: THEME.colors.textTertiary,
     letterSpacing: 1.2,
-    marginBottom: 6,
+    marginBottom: 4,
   },
   sectionHint: {
     fontSize: 13,
-    color: '#6b7280',
-    marginBottom: 14,
+    color: THEME.colors.textSecondary,
+    marginBottom: 16,
     lineHeight: 18,
   },
   loadingBox: {
     alignItems: 'center',
-    paddingVertical: 8,
+    paddingVertical: 12,
   },
   loadingText: {
     fontSize: 13,
-    color: '#6b7280',
+    color: THEME.colors.textSecondary,
   },
-  codeRow: {
+
+  // --- Code Display ---
+  codeContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
-    gap: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(139, 124, 255, 0.35)',
+    borderRadius: 16,
+    paddingHorizontal: 18,
+    paddingVertical: 14,
+    marginBottom: 14,
+    gap: 12,
   },
   codeText: {
     flex: 1,
     fontSize: 26,
     fontWeight: '800',
-    color: '#16a34a',
+    color: THEME.colors.accentPrimary,
     letterSpacing: 5,
+    textAlign: 'center',
   },
   eyeBtn: {
-    padding: 6,
+    padding: 4,
   },
   eyeIcon: {
-    fontSize: 22,
+    fontSize: 20,
   },
   copyBtn: {
-    backgroundColor: '#16a34a',
-    borderRadius: 12,
-    paddingVertical: 11,
+    backgroundColor: 'rgba(139, 124, 255, 0.16)',
+    borderWidth: 1,
+    borderColor: THEME.colors.accentPrimary,
+    borderRadius: 14,
+    paddingVertical: 12,
     alignItems: 'center',
   },
   copyBtnText: {
-    color: '#fff',
+    color: '#ffffff',
     fontSize: 14,
     fontWeight: '700',
+    letterSpacing: 0.2,
   },
   errorBox: {
     marginTop: 4,
   },
   errorText: {
-    color: '#dc2626',
+    color: THEME.colors.danger,
     fontSize: 13,
     marginBottom: 10,
   },
   retryBtn: {
-    backgroundColor: '#dcfce7',
-    borderColor: '#16a34a',
+    backgroundColor: 'rgba(255, 255, 255, 0.08)',
     borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
     borderRadius: 10,
-    paddingVertical: 9,
+    paddingVertical: 8,
     paddingHorizontal: 16,
     alignSelf: 'flex-start',
   },
   retryBtnText: {
-    color: '#16a34a',
+    color: THEME.colors.textPrimary,
     fontSize: 13,
     fontWeight: '600',
   },
+
+  // --- Code Input ---
   codeInput: {
-    backgroundColor: '#fff',
-    borderWidth: 1.5,
-    borderColor: 'rgba(0,0,0,0.12)',
-    borderRadius: 12,
-    paddingHorizontal: 14,
-    paddingVertical: 12,
-    fontSize: 20,
-    letterSpacing: 3,
-    color: '#1a1a1a',
-    marginBottom: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorderHighlight,
+    borderRadius: 16,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    fontSize: 22,
+    letterSpacing: 4,
+    color: '#ffffff',
+    marginBottom: 12,
     textAlign: 'center',
-  },
-  connectErrorText: {
-    color: '#dc2626',
-    fontSize: 13,
-    marginBottom: 8,
-  },
-  connectSuccessText: {
-    color: '#16a34a',
-    fontSize: 13,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  connectBtn: {
-    backgroundColor: '#16a34a',
-    borderRadius: 12,
-    paddingVertical: 13,
-    alignItems: 'center',
-  },
-  connectBtnDisabled: {
-    backgroundColor: '#86efac',
-  },
-  connectBtnText: {
-    color: '#fff',
-    fontSize: 16,
     fontWeight: '700',
   },
-  emptyText: {
-    fontSize: 14,
-    color: '#9ca3af',
-    fontStyle: 'italic',
-    paddingVertical: 4,
+  alertError: {
+    backgroundColor: 'rgba(255, 69, 58, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 69, 58, 0.3)',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 10,
   },
+  alertErrorText: {
+    color: '#fca5a5',
+    fontSize: 13,
+    textAlign: 'center',
+  },
+  alertSuccess: {
+    backgroundColor: 'rgba(48, 209, 88, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(48, 209, 88, 0.3)',
+    borderRadius: 12,
+    padding: 10,
+    marginBottom: 10,
+  },
+  alertSuccessText: {
+    color: '#86efac',
+    fontSize: 13,
+    textAlign: 'center',
+    fontWeight: '600',
+  },
+  connectBtn: {
+    backgroundColor: THEME.colors.accentPrimary,
+    borderRadius: 16,
+    paddingVertical: 14,
+    alignItems: 'center',
+    shadowColor: THEME.colors.accentPrimary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  connectBtnDisabled: {
+    opacity: 0.45,
+    shadowOpacity: 0,
+  },
+  connectBtnText: {
+    color: '#ffffff',
+    fontSize: 16,
+    fontWeight: '800',
+    letterSpacing: 0.3,
+  },
+
+  // --- Connection Item ---
   connectionItem: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 12,
     paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.06)',
+  },
+  connectionDivider: {
+    height: 1,
+    backgroundColor: THEME.colors.glassBorderSubtle,
+    marginVertical: 4,
   },
   connectionAvatar: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#dcfce7',
+    width: 40,
+    height: 40,
+    borderRadius: 14,
+    backgroundColor: 'rgba(90, 200, 250, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(90, 200, 250, 0.3)',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1.5,
-    borderColor: '#86efac',
   },
   connectionAvatarText: {
     fontSize: 16,
     fontWeight: '800',
-    color: '#16a34a',
+    color: THEME.colors.accentSecondary,
   },
   connectionName: {
-    fontSize: 14,
-    fontWeight: '600',
-    color: '#1a1a1a',
+    fontSize: 15,
+    fontWeight: '700',
+    color: THEME.colors.textPrimary,
   },
   connectionStatus: {
     fontSize: 12,
-    color: '#9ca3af',
+    color: THEME.colors.textSecondary,
     marginTop: 1,
-    textTransform: 'capitalize',
+  },
+  connectedBadge: {
+    backgroundColor: 'rgba(48, 209, 88, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(48, 209, 88, 0.25)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  connectedBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#86efac',
+    letterSpacing: 0.8,
+  },
+
+  // --- Empty ---
+  emptyContainer: {
+    alignItems: 'center',
+    paddingVertical: 16,
+    gap: 4,
+  },
+  emptyIcon: {
+    fontSize: 24,
+    marginBottom: 4,
+  },
+  emptyTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: THEME.colors.textPrimary,
+  },
+  emptySubtitle: {
+    fontSize: 12,
+    color: THEME.colors.textSecondary,
+    textAlign: 'center',
+    marginTop: 2,
+    lineHeight: 16,
   },
 });

@@ -11,15 +11,15 @@ import {
   BackHandler,
   StatusBar,
 } from 'react-native';
+import { THEME } from './theme';
 
-const DRAWER_WIDTH = Math.min(Dimensions.get('window').width * 0.75, 300);
+const DRAWER_WIDTH = Math.min(Dimensions.get('window').width * 0.78, 320);
 const ANIMATION_DURATION = 250;
 
 export function HamburgerButton({ isOpen, onPress }) {
   const topRotate = useRef(new Animated.Value(0)).current;
   const midOpacity = useRef(new Animated.Value(1)).current;
   const botRotate = useRef(new Animated.Value(0)).current;
-  // Vertical shift so lines converge at centre when forming X
   const topTranslateY = useRef(new Animated.Value(0)).current;
   const botTranslateY = useRef(new Animated.Value(0)).current;
 
@@ -45,13 +45,13 @@ export function HamburgerButton({ isOpen, onPress }) {
         useNativeDriver: true,
       }),
       Animated.timing(topTranslateY, {
-        toValue: isOpen ? 8 : 0,
+        toValue: isOpen ? 7 : 0,
         duration: ANIMATION_DURATION,
         easing: Easing.bezier(0.4, 0, 0.2, 1),
         useNativeDriver: true,
       }),
       Animated.timing(botTranslateY, {
-        toValue: isOpen ? -8 : 0,
+        toValue: isOpen ? -7 : 0,
         duration: ANIMATION_DURATION,
         easing: Easing.bezier(0.4, 0, 0.2, 1),
         useNativeDriver: true,
@@ -104,12 +104,16 @@ const hamburgerStyles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: 5,
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.10)',
   },
   bar: {
     width: 20,
-    height: 2.2,
+    height: 2,
     borderRadius: 2,
-    backgroundColor: '#1a1a1a',
+    backgroundColor: THEME.colors.textPrimary,
   },
 });
 
@@ -128,7 +132,7 @@ export default function SideMenu({ isOpen, onClose, onNavigate }) {
         useNativeDriver: true,
       }),
       Animated.timing(backdropOpacity, {
-        toValue: isOpen ? 0.4 : 0,
+        toValue: isOpen ? 0.7 : 0,
         duration: ANIMATION_DURATION,
         easing: Easing.bezier(0.4, 0, 0.2, 1),
         useNativeDriver: true,
@@ -151,10 +155,6 @@ export default function SideMenu({ isOpen, onClose, onNavigate }) {
     setTimeout(() => onNavigate(screen), 50); // let close animation start first
   };
 
-  if (!isOpen && translateX._value === -DRAWER_WIDTH) {
-    // Fully hidden — skip rendering backdrop to save layout cost
-  }
-
   return (
     <>
       {/* Backdrop */}
@@ -173,7 +173,10 @@ export default function SideMenu({ isOpen, onClose, onNavigate }) {
           <View style={styles.drawerLogo}>
             <Text style={styles.drawerLogoText}>N</Text>
           </View>
-          <Text style={styles.drawerTitle}>Nudgr</Text>
+          <View>
+            <Text style={styles.drawerTitle}>Nudgr</Text>
+            <Text style={styles.drawerSubtitle}>Smart Location Reminders</Text>
+          </View>
         </View>
 
         <View style={styles.divider} />
@@ -183,8 +186,14 @@ export default function SideMenu({ isOpen, onClose, onNavigate }) {
           onPress={() => navigate('profile')}
           activeOpacity={0.7}
         >
-          <Text style={styles.menuItemIcon}>👤</Text>
-          <Text style={styles.menuItemText}>Profile</Text>
+          <View style={styles.iconContainer}>
+            <Text style={styles.menuItemIcon}>👤</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.menuItemText}>Profile & Account</Text>
+            <Text style={styles.menuItemSubtext}>Settings, diagnostics & logout</Text>
+          </View>
+          <Text style={styles.chevron}>›</Text>
         </TouchableOpacity>
 
         <TouchableOpacity
@@ -192,14 +201,23 @@ export default function SideMenu({ isOpen, onClose, onNavigate }) {
           onPress={() => navigate('myconnection')}
           activeOpacity={0.7}
         >
-          <Text style={styles.menuItemIcon}>🔗</Text>
-          <Text style={styles.menuItemText}>My Connection</Text>
+          <View style={styles.iconContainer}>
+            <Text style={styles.menuItemIcon}>🔗</Text>
+          </View>
+          <View style={{ flex: 1 }}>
+            <Text style={styles.menuItemText}>My Connections</Text>
+            <Text style={styles.menuItemSubtext}>Pair with peers & share code</Text>
+          </View>
+          <Text style={styles.chevron}>›</Text>
         </TouchableOpacity>
 
         <View style={styles.divider} />
 
         <View style={styles.drawerFooter}>
-          <Text style={styles.drawerFooterText}>Nudgr V2</Text>
+          <View style={styles.footerBadge}>
+            <Text style={styles.footerBadgeText}>NUDGR V2</Text>
+          </View>
+          <Text style={styles.drawerFooterText}>iPhone Glass Edition</Text>
         </View>
       </Animated.View>
     </>
@@ -208,7 +226,7 @@ export default function SideMenu({ isOpen, onClose, onNavigate }) {
 
 const styles = StyleSheet.create({
   backdrop: {
-    backgroundColor: '#000',
+    backgroundColor: '#000000',
     zIndex: 100,
   },
   drawer: {
@@ -217,77 +235,126 @@ const styles = StyleSheet.create({
     left: 0,
     bottom: 0,
     width: DRAWER_WIDTH,
-    backgroundColor: 'rgba(255,255,255,0.97)',
+    backgroundColor: '#0c101d',
     zIndex: 101,
     borderRightWidth: 1,
-    borderRightColor: 'rgba(0,0,0,0.08)',
+    borderRightColor: THEME.colors.glassBorder,
     shadowColor: '#000',
-    shadowOffset: { width: 4, height: 0 },
-    shadowOpacity: 0.12,
-    shadowRadius: 12,
-    elevation: 16,
-    paddingTop: (StatusBar.currentHeight || 0) + 16,
+    shadowOffset: { width: 8, height: 0 },
+    shadowOpacity: 0.5,
+    shadowRadius: 24,
+    elevation: 20,
+    paddingTop: (StatusBar.currentHeight || 0) + 24,
   },
   drawerHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
-    paddingBottom: 20,
-    gap: 12,
+    paddingHorizontal: 22,
+    paddingBottom: 22,
+    gap: 14,
   },
   drawerLogo: {
-    width: 40,
-    height: 40,
-    borderRadius: 12,
-    backgroundColor: '#16a34a',
+    width: 44,
+    height: 44,
+    borderRadius: 14,
+    backgroundColor: THEME.colors.accentPrimary,
     alignItems: 'center',
     justifyContent: 'center',
+    shadowColor: THEME.colors.accentPrimary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.45,
+    shadowRadius: 10,
+    elevation: 6,
   },
   drawerLogoText: {
-    color: '#fff',
-    fontSize: 20,
+    color: '#ffffff',
+    fontSize: 22,
     fontWeight: '900',
     letterSpacing: -1,
   },
   drawerTitle: {
     fontSize: 22,
     fontWeight: '800',
-    color: '#1a1a1a',
+    color: THEME.colors.textPrimary,
     letterSpacing: -0.5,
+  },
+  drawerSubtitle: {
+    fontSize: 12,
+    color: THEME.colors.textSecondary,
+    fontWeight: '500',
   },
   divider: {
     height: 1,
-    backgroundColor: 'rgba(0,0,0,0.07)',
-    marginHorizontal: 16,
-    marginVertical: 8,
+    backgroundColor: THEME.colors.glassBorderSubtle,
+    marginHorizontal: 18,
+    marginVertical: 10,
   },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingVertical: 14,
-    borderRadius: 12,
-    marginHorizontal: 8,
-    marginVertical: 2,
+    borderRadius: 18,
+    marginHorizontal: 12,
+    marginVertical: 4,
     gap: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.06)',
+  },
+  iconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.10)',
   },
   menuItemIcon: {
-    fontSize: 20,
+    fontSize: 18,
   },
   menuItemText: {
-    fontSize: 16,
-    fontWeight: '600',
-    color: '#1a1a1a',
+    fontSize: 15,
+    fontWeight: '700',
+    color: THEME.colors.textPrimary,
     letterSpacing: -0.2,
+  },
+  menuItemSubtext: {
+    fontSize: 11,
+    color: THEME.colors.textSecondary,
+    marginTop: 2,
+  },
+  chevron: {
+    fontSize: 20,
+    color: THEME.colors.textTertiary,
+    fontWeight: '300',
   },
   drawerFooter: {
     position: 'absolute',
     bottom: 32,
-    left: 20,
+    left: 22,
+    gap: 6,
+  },
+  footerBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: 'rgba(139, 124, 255, 0.12)',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: 'rgba(139, 124, 255, 0.25)',
+  },
+  footerBadgeText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: THEME.colors.accentPrimary,
+    letterSpacing: 1.5,
   },
   drawerFooterText: {
     fontSize: 12,
-    color: '#9ca3af',
+    color: THEME.colors.textTertiary,
     fontWeight: '500',
   },
 });

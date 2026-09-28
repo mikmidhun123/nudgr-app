@@ -11,12 +11,12 @@ import {
 } from 'react-native';
 import {
   scheduleTestNotification,
-  checkAndRequestNotificationPermissions,
   getNotificationDiagnostics,
   createAndScheduleTimeTestNudge,
   verifyScheduledNudgeAlarms,
   cancelNudgeAlarm,
 } from '../notifications/localNotifications';
+import { THEME } from './theme';
 
 export default function ProfileScreen({ uid, email, displayName, onBack, onSignOut }) {
   // Notification testing state
@@ -37,8 +37,8 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
       if (res.success) {
         const msg =
           seconds > 0
-            ? `✓ Scheduled for ${seconds}s from now! (ID: ${res.notificationId})\n👉 Lock your phone or minimize app to verify background delivery.`
-            : `✓ Instant notification sent! (ID: ${res.notificationId})`;
+            ? `✓ Scheduled for ${seconds}s from now! (ID: ${res.notificationId})\n👉 Lock your phone or leave app to test background delivery.`
+            : `✓ Instant notification delivered! (ID: ${res.notificationId})`;
         setTestStatus({ message: msg, isError: false });
       } else {
         setTestStatus({ message: `✗ Failed: ${res.error}`, isError: true });
@@ -80,11 +80,9 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
         setActiveAlarm({ id: res.nudgeId, notificationId: res.notificationId, targetTime: res.targetTime });
         const msg =
           `✓ Nudgr Time Trigger Scheduled!\n` +
-          `• Nudgr ID: ${res.nudgeId}\n` +
           `• Target Time: ${res.targetTime} (+${seconds}s)\n` +
-          `• Notification ID: ${res.notificationId}\n` +
-          `• OS Alarm Verified: ${res.matchingFound ? 'YES (Active in Android OS)' : 'NO (Missing)'}\n\n` +
-          `👉 PROTOCOL:\n1. Leave the app.\n2. Lock your phone now.\n3. Wait until ${res.targetTime} for notification to appear.`;
+          `• OS Alarm Registered: ${res.matchingFound ? 'YES' : 'NO'}\n\n` +
+          `👉 Lock your phone now and wait for notification!`;
         setTimeTestStatus({ message: msg, isError: false });
       } else {
         setTimeTestStatus({ message: `✗ Scheduling failed: ${res.error}`, isError: true });
@@ -104,17 +102,15 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
       if (res.matchingFound) {
         const item = res.items[0];
         const msg =
-          `✓ OS Alarm Verified Active!\n` +
-          `• Total Alarms in Android OS: ${res.total}\n` +
+          `✓ OS Alarm Verified Active in OS!\n` +
           `• Alarm ID: ${item?.id}\n` +
-          `• Nudgr ID: ${item?.nudgeId}\n` +
-          `• Ready to fire on time!`;
+          `• Total Alarms in OS: ${res.total}`;
         setTimeTestStatus({ message: msg, isError: false });
       } else {
         const msg =
           res.total > 0
-            ? `⚠️ ${res.total} alarm(s) found in OS, but none matched current Nudgr ID.`
-            : '⚠️ No scheduled alarms currently registered in Android OS.';
+            ? `⚠️ ${res.total} alarm(s) in OS, but none matched current test.`
+            : '⚠️ No scheduled alarms currently registered in OS.';
         setTimeTestStatus({ message: msg, isError: true });
       }
     } catch (e) {
@@ -135,13 +131,19 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
     }
   };
 
+  const initials = (displayName || email || 'U')
+    .split(' ')
+    .map((w) => w[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+
   return (
     <View style={styles.screen}>
+      <StatusBar barStyle="light-content" backgroundColor={THEME.colors.bg} />
+
       {/* Header */}
       <View style={styles.header}>
-        <View style={styles.headerTitleContainer} pointerEvents="none">
-          <Text style={styles.headerTitle}>Profile</Text>
-        </View>
         <TouchableOpacity
           onPress={onBack}
           style={styles.backBtn}
@@ -150,153 +152,167 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
         >
           <Text style={styles.backArrow}>‹</Text>
         </TouchableOpacity>
+        <View style={styles.headerTitleContainer} pointerEvents="none">
+          <Text style={styles.headerTitle}>Account & Profile</Text>
+        </View>
+        <View style={{ width: 44 }} />
       </View>
 
       <ScrollView
         contentContainerStyle={styles.scrollContainer}
         showsVerticalScrollIndicator={false}
       >
-        {/* Account Card */}
-        <View style={styles.glassCard}>
-          <Text style={styles.sectionLabel}>ACCOUNT</Text>
-          <View style={styles.infoRow}>
-            <Text style={styles.infoKey}>Name</Text>
-            <Text style={styles.infoValue}>{displayName || '—'}</Text>
+        {/* Large Profile Hero Glass Card */}
+        <View style={styles.profileHeroCard}>
+          <View style={styles.avatarCircle}>
+            <Text style={styles.avatarInitials}>{initials}</Text>
           </View>
-          <View style={[styles.infoRow, { borderBottomWidth: 0 }]}>
-            <Text style={styles.infoKey}>Email</Text>
-            <Text style={styles.infoValue} numberOfLines={1} ellipsizeMode="tail">
-              {email || '—'}
-            </Text>
+          <Text style={styles.profileName}>{displayName || 'Nudgr User'}</Text>
+          <Text style={styles.profileEmail}>{email || 'No email associated'}</Text>
+          <View style={styles.uidBadge}>
+            <Text style={styles.uidText}>UID: {uid?.slice(0, 10)}…</Text>
           </View>
         </View>
 
-        {/* Sign Out */}
+        {/* Grouped Settings Glass Rows */}
+        <Text style={styles.sectionHeader}>SETTINGS</Text>
+        <View style={styles.groupedRowsCard}>
+          <TouchableOpacity
+            style={styles.rowItem}
+            onPress={runDiagnosticsCheck}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.rowIconBox, { backgroundColor: 'rgba(90, 200, 250, 0.14)' }]}>
+              <Text style={styles.rowIcon}>🔔</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>Notifications</Text>
+              <Text style={styles.rowSubtitle}>Check channel & post permissions</Text>
+            </View>
+            <Text style={styles.chevron}>›</Text>
+          </TouchableOpacity>
+
+          <View style={styles.rowDivider} />
+
+          <View style={styles.rowItem}>
+            <View style={[styles.rowIconBox, { backgroundColor: 'rgba(48, 209, 88, 0.14)' }]}>
+              <Text style={styles.rowIcon}>📍</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.rowTitle}>Geofence Engine</Text>
+              <Text style={styles.rowSubtitle}>Background arrival monitor active</Text>
+            </View>
+            <View style={styles.statusActivePill}>
+              <Text style={styles.statusActiveText}>ACTIVE</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* Sign Out Glass Button */}
         <TouchableOpacity style={styles.signOutBtn} onPress={onSignOut} activeOpacity={0.8}>
-          <Text style={styles.signOutText}>Sign Out</Text>
+          <Text style={styles.signOutText}>Sign Out of Nudgr</Text>
         </TouchableOpacity>
 
-        {/* Developer / Diagnostics Section */}
-        <Text style={styles.devSectionHeader}>🛠 Developer / Diagnostics</Text>
+        {/* Developer Diagnostics Glass Panel */}
+        <Text style={styles.sectionHeader}>DEVELOPER & DIAGNOSTICS</Text>
 
-        {/* Notification Delivery Verification Card */}
-        <View style={[styles.glassCard, styles.devCard]}>
-          <Text style={styles.devCardTitle}>🔔 Notification Delivery Verification</Text>
+        <View style={styles.devGlassCard}>
+          <Text style={styles.devCardTitle}>🔔 Notification Shade Verification</Text>
           <Text style={styles.devCardSubtitle}>
-            Direct OS delivery test (Button → Local Notification → Android Shade). Zero dependency on GPS, Firebase, or Nudgr rules.
+            Tests immediate local and 10s background notification delivery to verify system push readiness.
           </Text>
 
           <TouchableOpacity
-            style={[styles.devBtn, styles.devBtnPrimary, { paddingVertical: 14, marginBottom: 8 }]}
+            style={styles.devPrimaryBtn}
             onPress={() => runTestNotification(10)}
             disabled={testing}
             activeOpacity={0.8}
           >
-            <Text style={[styles.devBtnText, { fontSize: 15, fontWeight: '800' }]}>TEST NOTIFICATION</Text>
+            <Text style={styles.devPrimaryBtnText}>⚡ TEST 10S BACKGROUND ALERT</Text>
           </TouchableOpacity>
 
           <View style={styles.devBtnRow}>
             <TouchableOpacity
-              style={[styles.devBtn, styles.devBtnSecondary]}
+              style={styles.devSecondaryBtn}
               onPress={() => runTestNotification(0)}
               disabled={testing}
               activeOpacity={0.8}
             >
-              <Text style={styles.devBtnSecondaryText}>⚡ Test Instant (Foreground)</Text>
+              <Text style={styles.devSecondaryBtnText}>Instant Push</Text>
             </TouchableOpacity>
+
             <TouchableOpacity
-              style={[styles.devBtn, styles.devBtnSecondary]}
+              style={styles.devSecondaryBtn}
               onPress={runDiagnosticsCheck}
               disabled={testing}
               activeOpacity={0.8}
             >
-              <Text style={styles.devBtnSecondaryText}>🔍 Check Permissions</Text>
+              <Text style={styles.devSecondaryBtnText}>Check Perms</Text>
             </TouchableOpacity>
           </View>
 
           {testing && (
-            <View style={{ marginTop: 10, alignItems: 'center' }}>
-              <ActivityIndicator color="#16a34a" size="small" />
-            </View>
+            <ActivityIndicator color={THEME.colors.accentPrimary} style={{ marginVertical: 8 }} />
           )}
 
           {testStatus && (
             <View style={[styles.statusBox, testStatus.isError ? styles.statusError : styles.statusSuccess]}>
-              <Text style={[styles.statusText, testStatus.isError ? styles.statusErrorText : styles.statusSuccessText]}>
+              <Text style={[styles.statusBoxText, testStatus.isError ? styles.textError : styles.textSuccess]}>
                 {testStatus.message}
               </Text>
             </View>
           )}
-
-          <Text style={styles.hintText}>
-            📋 Test Protocol: Press "TEST NOTIFICATION", then immediately press Home / lock screen. Wait 10–15s for the notification to appear in the Android shade.
-          </Text>
         </View>
 
-        {/* Time Trigger Verification Card */}
-        <View style={[styles.glassCard, styles.devCard]}>
-          <Text style={styles.devCardTitle}>⏱️ Nudgr Time Trigger Verification</Text>
+        {/* Time Trigger Test Card */}
+        <View style={styles.devGlassCard}>
+          <Text style={styles.devCardTitle}>⏱️ Pure Time Alarm Verification</Text>
           <Text style={styles.devCardSubtitle}>
-            Pure time-based Nudgr trigger test. Verifies that setting a trigger time calls the notification engine and produces an actual Android notification.
+            Pure OS AlarmManager test. Zero dependency on GPS, peer connection, or Cloud Functions.
           </Text>
 
           <View style={styles.devBtnRow}>
             <TouchableOpacity
-              style={[styles.devBtn, styles.devBtnPrimary]}
+              style={styles.devSecondaryBtn}
               onPress={() => runTimeTest(60)}
               disabled={timeTesting}
               activeOpacity={0.8}
             >
-              <Text style={styles.devBtnText}>⏱️ Set 1-Min Test (+60s)</Text>
+              <Text style={styles.devSecondaryBtnText}>+60s Alarm</Text>
             </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.devBtn, { backgroundColor: '#059669' }]}
-              onPress={() => runTimeTest(120)}
-              disabled={timeTesting}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.devBtnText}>⏱️ Set 2-Min Test (+120s)</Text>
-            </TouchableOpacity>
-          </View>
 
-          <View style={[styles.devBtnRow, { marginTop: 6 }]}>
             <TouchableOpacity
-              style={[styles.devBtn, styles.devBtnSecondary]}
+              style={styles.devSecondaryBtn}
               onPress={verifyAlarms}
               disabled={timeTesting}
               activeOpacity={0.8}
             >
-              <Text style={styles.devBtnSecondaryText}>🔍 Verify OS Alarms</Text>
+              <Text style={styles.devSecondaryBtnText}>Verify in OS</Text>
             </TouchableOpacity>
+
             {activeAlarm && (
               <TouchableOpacity
-                style={[styles.devBtn, { backgroundColor: '#fee2e2', borderColor: '#fca5a5', borderWidth: 1 }]}
+                style={[styles.devSecondaryBtn, { borderColor: THEME.colors.danger }]}
                 onPress={cancelActiveAlarm}
                 disabled={timeTesting}
                 activeOpacity={0.8}
               >
-                <Text style={{ color: '#dc2626', fontWeight: '700', fontSize: 13, textAlign: 'center' }}>❌ Cancel Alarm</Text>
+                <Text style={{ color: THEME.colors.danger, fontWeight: '700', fontSize: 12 }}>Cancel</Text>
               </TouchableOpacity>
             )}
           </View>
 
           {timeTesting && (
-            <View style={{ marginTop: 10, alignItems: 'center' }}>
-              <ActivityIndicator color="#16a34a" size="small" />
-            </View>
+            <ActivityIndicator color={THEME.colors.accentSecondary} style={{ marginVertical: 8 }} />
           )}
 
           {timeTestStatus && (
             <View style={[styles.statusBox, timeTestStatus.isError ? styles.statusError : styles.statusSuccess]}>
-              <Text style={[styles.statusText, timeTestStatus.isError ? styles.statusErrorText : styles.statusSuccessText]}>
+              <Text style={[styles.statusBoxText, timeTestStatus.isError ? styles.textError : styles.textSuccess]}>
                 {timeTestStatus.message}
               </Text>
             </View>
           )}
-
-          <Text style={styles.hintText}>
-            📋 Instructions: Tap "Set 1-Min Test", leave app, lock phone. Wait until the target time for the notification to pop in the Android shade!
-          </Text>
         </View>
 
         <View style={{ height: 40 }} />
@@ -305,31 +321,20 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
   );
 }
 
-const GLASS = {
-  backgroundColor: 'rgba(255,255,255,0.88)',
-  borderWidth: 1,
-  borderColor: 'rgba(0,0,0,0.07)',
-  borderRadius: 20,
-  shadowColor: '#000',
-  shadowOffset: { width: 0, height: 2 },
-  shadowOpacity: 0.07,
-  shadowRadius: 8,
-  elevation: 3,
-};
-
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: '#f0f4f0',
+    backgroundColor: THEME.colors.bg,
   },
   header: {
-    height: 52,
+    height: 54,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    backgroundColor: '#ffffff',
+    justifyContent: 'space-between',
+    paddingHorizontal: 12,
+    backgroundColor: 'rgba(7, 10, 18, 0.85)',
     borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.07)',
+    borderBottomColor: THEME.colors.glassBorderSubtle,
     zIndex: 10,
   },
   headerTitleContainer: {
@@ -338,9 +343,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 18,
+    fontSize: 17,
     fontWeight: '700',
-    color: '#1a1a1a',
+    color: THEME.colors.textPrimary,
     letterSpacing: -0.3,
   },
   backBtn: {
@@ -348,152 +353,253 @@ const styles = StyleSheet.create({
     height: 44,
     justifyContent: 'center',
     alignItems: 'center',
+    borderRadius: 14,
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
   },
   backArrow: {
-    fontSize: 32,
-    color: '#16a34a',
+    fontSize: 28,
+    color: THEME.colors.accentPrimary,
     fontWeight: '300',
-    lineHeight: 34,
+    lineHeight: 30,
   },
   scrollContainer: {
-    padding: 16,
+    paddingHorizontal: 20,
     paddingTop: 20,
+    paddingBottom: 40,
   },
-  glassCard: {
-    ...GLASS,
-    padding: 18,
+
+  // --- Profile Hero Card ---
+  profileHeroCard: {
+    backgroundColor: THEME.colors.bgCard,
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: THEME.radius.cardLg,
+    padding: 24,
+    alignItems: 'center',
+    marginBottom: 24,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 4,
+  },
+  avatarCircle: {
+    width: 80,
+    height: 80,
+    borderRadius: 40,
+    backgroundColor: 'rgba(139, 124, 255, 0.18)',
+    borderWidth: 2,
+    borderColor: THEME.colors.accentPrimary,
+    alignItems: 'center',
+    justifyContent: 'center',
     marginBottom: 14,
+    shadowColor: THEME.colors.accentPrimary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+    elevation: 6,
   },
-  sectionLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#9ca3af',
-    letterSpacing: 1.2,
+  avatarInitials: {
+    fontSize: 28,
+    fontWeight: '800',
+    color: '#ffffff',
+    letterSpacing: 1,
+  },
+  profileName: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: THEME.colors.textPrimary,
+    letterSpacing: -0.3,
+    marginBottom: 4,
+  },
+  profileEmail: {
+    fontSize: 14,
+    color: THEME.colors.textSecondary,
     marginBottom: 12,
   },
-  infoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 10,
-    borderBottomWidth: 1,
-    borderBottomColor: 'rgba(0,0,0,0.06)',
-  },
-  infoKey: {
-    fontSize: 14,
-    color: '#6b7280',
-    fontWeight: '500',
-    flex: 1,
-  },
-  infoValue: {
-    fontSize: 14,
-    color: '#1a1a1a',
-    fontWeight: '600',
-    flex: 2,
-    textAlign: 'right',
-  },
-  signOutBtn: {
-    backgroundColor: '#fee2e2',
-    borderRadius: 14,
-    paddingVertical: 13,
-    alignItems: 'center',
-    marginBottom: 28,
+  uidBadge: {
+    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    paddingHorizontal: 12,
+    paddingVertical: 4,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: '#fca5a5',
+    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
-  signOutText: {
-    color: '#dc2626',
+  uidText: {
+    fontSize: 11,
+    color: THEME.colors.textTertiary,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+  },
+
+  // --- Grouped Rows Card ---
+  sectionHeader: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: THEME.colors.textTertiary,
+    letterSpacing: 1.2,
+    marginBottom: 10,
+    marginLeft: 4,
+  },
+  groupedRowsCard: {
+    backgroundColor: THEME.colors.bgCard,
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: THEME.radius.card,
+    paddingVertical: 4,
+    marginBottom: 20,
+  },
+  rowItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 14,
+    gap: 12,
+  },
+  rowIconBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 11,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  rowIcon: {
+    fontSize: 18,
+  },
+  rowTitle: {
     fontSize: 15,
     fontWeight: '700',
+    color: THEME.colors.textPrimary,
+    marginBottom: 2,
   },
-  devSectionHeader: {
-    fontSize: 13,
+  rowSubtitle: {
+    fontSize: 12,
+    color: THEME.colors.textSecondary,
+  },
+  chevron: {
+    fontSize: 20,
+    color: THEME.colors.textTertiary,
+    fontWeight: '300',
+  },
+  statusActivePill: {
+    backgroundColor: 'rgba(48, 209, 88, 0.15)',
+    borderWidth: 1,
+    borderColor: 'rgba(48, 209, 88, 0.3)',
+    borderRadius: 8,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  statusActiveText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: '#86efac',
+    letterSpacing: 0.8,
+  },
+  rowDivider: {
+    height: 1,
+    backgroundColor: THEME.colors.glassBorderSubtle,
+    marginHorizontal: 16,
+  },
+
+  // --- Sign Out Button ---
+  signOutBtn: {
+    backgroundColor: 'rgba(255, 69, 58, 0.12)',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 69, 58, 0.30)',
+    borderRadius: THEME.radius.button,
+    paddingVertical: 15,
+    alignItems: 'center',
+    marginBottom: 26,
+  },
+  signOutText: {
+    color: '#fca5a5',
+    fontSize: 15,
     fontWeight: '700',
-    color: '#6b7280',
-    letterSpacing: 0.3,
-    marginBottom: 12,
-    paddingLeft: 4,
+    letterSpacing: -0.2,
   },
-  devCard: {
-    backgroundColor: 'rgba(240,253,244,0.9)',
-    borderColor: 'rgba(134,239,172,0.5)',
+
+  // --- Developer Glass Card ---
+  devGlassCard: {
+    backgroundColor: THEME.colors.bgCard,
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: THEME.radius.card,
+    padding: 18,
+    marginBottom: 16,
   },
   devCardTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: '#166534',
+    color: THEME.colors.textPrimary,
     marginBottom: 4,
   },
   devCardSubtitle: {
     fontSize: 12,
-    color: '#15803d',
-    marginBottom: 12,
+    color: THEME.colors.textSecondary,
     lineHeight: 17,
+    marginBottom: 14,
+  },
+  devPrimaryBtn: {
+    backgroundColor: THEME.colors.accentPrimary,
+    borderRadius: 14,
+    paddingVertical: 12,
+    alignItems: 'center',
+    marginBottom: 10,
+    shadowColor: THEME.colors.accentPrimary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  devPrimaryBtnText: {
+    color: '#ffffff',
+    fontSize: 13,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
   devBtnRow: {
     flexDirection: 'row',
     gap: 8,
   },
-  devBtn: {
+  devSecondaryBtn: {
     flex: 1,
-    borderRadius: 10,
+    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorder,
+    borderRadius: 12,
     paddingVertical: 10,
-    paddingHorizontal: 8,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  devBtnPrimary: {
-    backgroundColor: '#16a34a',
-  },
-  devBtnSecondary: {
-    backgroundColor: '#dcfce7',
-    borderWidth: 1,
-    borderColor: '#16a34a',
-  },
-  devBtnText: {
-    color: '#ffffff',
+  devSecondaryBtnText: {
     fontSize: 12,
     fontWeight: '700',
-    textAlign: 'center',
-  },
-  devBtnSecondaryText: {
-    color: '#166534',
-    fontSize: 12,
-    fontWeight: '700',
-    textAlign: 'center',
+    color: THEME.colors.textPrimary,
   },
   statusBox: {
-    marginTop: 10,
-    padding: 10,
-    borderRadius: 10,
+    marginTop: 12,
+    padding: 12,
+    borderRadius: 12,
   },
   statusSuccess: {
-    backgroundColor: '#dcfce7',
+    backgroundColor: 'rgba(48, 209, 88, 0.12)',
     borderWidth: 1,
-    borderColor: '#86efac',
+    borderColor: 'rgba(48, 209, 88, 0.25)',
   },
   statusError: {
-    backgroundColor: '#fee2e2',
+    backgroundColor: 'rgba(255, 69, 58, 0.12)',
     borderWidth: 1,
-    borderColor: '#fca5a5',
+    borderColor: 'rgba(255, 69, 58, 0.25)',
   },
-  statusText: {
+  statusBoxText: {
     fontSize: 12,
     lineHeight: 17,
   },
-  statusSuccessText: {
-    color: '#166534',
+  textSuccess: {
+    color: '#86efac',
     fontWeight: '600',
   },
-  statusErrorText: {
-    color: '#991b1b',
+  textError: {
+    color: '#fca5a5',
     fontWeight: '600',
-  },
-  hintText: {
-    marginTop: 10,
-    fontSize: 11,
-    color: '#4b5563',
-    lineHeight: 15,
-    fontStyle: 'italic',
   },
 });
