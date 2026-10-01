@@ -33,6 +33,7 @@ import IncomingNudge from './src/ui/IncomingNudge';
 import ProfileScreen from './src/ui/ProfileScreen';
 import MyConnectionScreen from './src/ui/MyConnectionScreen';
 import { getActiveRingingState } from './src/notifications/incomingState';
+import { recordRuntimeStatus } from './src/diagnostics/runtimeStatus';
 
 // Register background message handler at module scope for headless FCM wakeups.
 // This MUST execute before any React component mounts.
@@ -48,6 +49,7 @@ messaging().setBackgroundMessageHandler(async (remoteMessage) => {
     const message = data?.message || 'Incoming Nudgr';
 
     console.log(`[FCM_RECEIVED_BACKGROUND] nudgeId=${nudgeId || 'NONE'} type=${data?.type || 'unknown'} senderName=${senderName}`);
+    await recordRuntimeStatus('FCM_RECEIVED_BACKGROUND', 'Background FCM data message received', { nudgeId });
 
     if (nudgeId) {
       console.log(`[FCM_HANDLER_STARTED] nudgeId=${nudgeId} creating local notification with actions`);
@@ -57,11 +59,13 @@ messaging().setBackgroundMessageHandler(async (remoteMessage) => {
         message,
       });
       console.log(`[FCM_NOTIFICATION_CREATED] nudgeId=${nudgeId} notificationId=${notifId || 'FAILED'}`);
+      await recordRuntimeStatus('INCOMING_NOTIFICATION', notifId ? 'Call-style incoming notification posted' : 'Incoming notification failed', { nudgeId, notificationId: notifId });
     } else {
       console.warn('[FCM_RECEIVED_BACKGROUND] No nudgeId in background message data');
     }
   } catch (err) {
     console.error(`[FCM_HANDLER_FAILED] Background handler error: ${err.message}`);
+    await recordRuntimeStatus('FCM_BACKGROUND_FAILED', err.message);
   }
 });
 
@@ -187,6 +191,11 @@ export default function App() {
           handleAnswerAction(nudgeId);
         } else if (actionId === 'DECLINE') {
           dismissIncoming();
+        } else if (data?.type === 'nudge_incoming') {
+          // A tap on the call-style local notification returns the recipient
+          // to IncomingNudge, not the ordinary Nudgr detail screen.
+          dismissIncoming();
+          showIncoming(nudgeId);
         } else {
           dismissIncoming();
           navigate('detail', { id: nudgeId, isReceived: true });
@@ -292,6 +301,7 @@ export default function App() {
         handledTriggeredNudgesRef.current.add(triggered.id);
 
         console.log(`[NUDGR_DELIVERY] nudgeId=${triggered.id} senderUid=${triggered.senderUid} recipientUid=${uid} source=firestore`);
+        recordRuntimeStatus('RECEIVER_FIRESTORE', 'Recipient received triggered Nudgr from Firestore', { nudgeId: triggered.id });
 
         showIncoming(triggered.id);
 
@@ -315,6 +325,7 @@ export default function App() {
         if (!nudgeId || handledTriggeredNudgesRef.current.has(nudgeId)) return;
         handledTriggeredNudgesRef.current.add(nudgeId);
         console.log(`[NUDGR_DELIVERY] nudgeId=${nudgeId} recipientUid=${uid} source=fcm-foreground`);
+        recordRuntimeStatus('FCM_RECEIVED_FOREGROUND', 'Foreground FCM data message received', { nudgeId });
         showIncoming(nudgeId);
         showIncomingNudgeNotification({
           nudgeId,
@@ -325,7 +336,7 @@ export default function App() {
       onNudgeOpened: (nudgeId) => {
         console.log('[NOTIFICATION_DEBUG] FCM message opened for nudge:', nudgeId);
         dismissIncoming();
-        navigate('detail', { id: nudgeId, isReceived: true });
+        showIncoming(nudgeId);
       },
     });
 

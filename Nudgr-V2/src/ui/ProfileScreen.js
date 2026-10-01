@@ -16,6 +16,8 @@ import {
   verifyScheduledNudgeAlarms,
   cancelNudgeAlarm,
 } from '../notifications/localNotifications';
+import { getRuntimeStatuses } from '../diagnostics/runtimeStatus';
+import { getGeofenceDiagnostics } from '../location/debugStatus';
 import { THEME } from './theme';
 
 export default function ProfileScreen({ uid, email, displayName, onBack, onSignOut }) {
@@ -23,6 +25,7 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
   const [testStatus, setTestStatus] = useState(null);
   const [testing, setTesting] = useState(false);
   const [diagnostics, setDiagnostics] = useState(null);
+  const [triggerTrace, setTriggerTrace] = useState(null);
 
   // Time Trigger testing state
   const [timeTestStatus, setTimeTestStatus] = useState(null);
@@ -66,6 +69,21 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
       });
     } catch (e) {
       setTestStatus({ message: `✗ Diagnostic Error: ${e.message}`, isError: true });
+    } finally {
+      setTesting(false);
+    }
+  };
+
+  const inspectTriggerTrace = async () => {
+    setTesting(true);
+    try {
+      const [geofence, entries] = await Promise.all([
+        getGeofenceDiagnostics(),
+        getRuntimeStatuses(),
+      ]);
+      setTriggerTrace({ geofence, entries: entries.slice(0, 6) });
+    } catch (e) {
+      setTestStatus({ message: `✗ Trigger trace error: ${e.message}`, isError: true });
     } finally {
       setTesting(false);
     }
@@ -259,6 +277,32 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
             <View style={[styles.statusBox, testStatus.isError ? styles.statusError : styles.statusSuccess]}>
               <Text style={[styles.statusBoxText, testStatus.isError ? styles.textError : styles.textSuccess]}>
                 {testStatus.message}
+              </Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.devGlassCard}>
+          <Text style={styles.devCardTitle}>📍 Geofence → Delivery Trace</Text>
+          <Text style={styles.devCardSubtitle}>
+            Shows Android geofence registration and the latest durable background stages after reopening the app.
+          </Text>
+          <TouchableOpacity
+            style={styles.devPrimaryBtn}
+            onPress={inspectTriggerTrace}
+            disabled={testing}
+            activeOpacity={0.8}
+          >
+            <Text style={styles.devPrimaryBtnText}>INSPECT TRIGGER TRACE</Text>
+          </TouchableOpacity>
+          {triggerTrace && (
+            <View style={styles.statusBox}>
+              <Text style={styles.statusBoxText}>
+                OS geofence: {triggerTrace.geofence.geofencesStarted ? 'REGISTERED' : 'NOT REGISTERED'}
+                {'\n'}Regions: {triggerTrace.geofence.activeRegionsCount} · Background location: {triggerTrace.geofence.backgroundPermission}
+                {triggerTrace.entries.length > 0
+                  ? `\n\n${triggerTrace.entries.map((entry) => `[${entry.stage}] ${entry.message}`).join('\n')}`
+                  : '\n\nNo runtime events captured yet.'}
               </Text>
             </View>
           )}

@@ -2,6 +2,7 @@ import * as Location from 'expo-location';
 import {
   registerGeofencesForNudges,
   stopGeofences,
+  clearPersistedSenderGeofences,
   evaluateSenderNudges,
 } from './backgroundGeofence';
 import {
@@ -83,6 +84,7 @@ export function startTriggerEngine({ uid, onStatus }) {
         fgWatcherSub = null;
       }
       await stopGeofences();
+      await clearPersistedSenderGeofences();
       return;
     }
 
@@ -157,5 +159,6 @@ export function startTriggerEngine({ uid, onStatus }) {
     }
     if (unsubSent) unsubSent();
     stopGeofences();
+    clearPersistedSenderGeofences();
   };
 }

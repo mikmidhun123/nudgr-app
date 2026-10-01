@@ -16,6 +16,8 @@ import {
   isCooldownActive,
 } from './geoUtils';
 import { createTriggerEvent } from '../db/triggers';
+import { showGeofenceEnterNotification } from '../notifications/localNotifications';
+import { recordRuntimeStatus } from '../diagnostics/runtimeStatus';
 
 function getAuth() {
   return firebase.auth();
@@ -97,6 +99,10 @@ export async function evaluateSenderNudges(coords, triggeredRegionId = null) {
     `latitude=${coords.latitude} longitude=${coords.longitude} ` +
     `accuracy=${coords.accuracy ?? 'unknown'} region=${triggeredRegionId || 'none'}`
   );
+  await recordRuntimeStatus('GEOFENCE_EVALUATE', 'Evaluating sender-owned Nudgrs', {
+    regionId: triggeredRegionId,
+    senderUid: uid,
+  });
 
   let allNudges = [];
 
@@ -184,6 +190,10 @@ export async function evaluateSenderNudges(coords, triggeredRegionId = null) {
 
     if (inside) {
       console.log(`[NUDGR_TRIGGER] ENTER matched sender nudgeId=${nudge.id}; creating trigger event`);
+      await recordRuntimeStatus('TRIGGER_START', 'ENTER matched sender Nudgr', {
+        nudgeId: nudge.id,
+        recipientUid: nudge.recipientUid,
+      });
       try {
         const result = await createTriggerEvent(nudge.id, {
           senderUid: uid,
@@ -193,8 +203,14 @@ export async function evaluateSenderNudges(coords, triggeredRegionId = null) {
           triggeredAt: getServerTimestampFn(),
         });
         console.log(`[NUDGR_TRIGGER] nudgeId=${nudge.id} result=${result.created ? 'CREATED' : 'SKIPPED'} cooldown=${!!result.cooldown}`);
+        await recordRuntimeStatus('TRIGGER_WRITE', result.created ? 'Trigger event created' : 'Trigger event skipped', {
+          nudgeId: nudge.id,
+          cooldown: !!result.cooldown,
+          triggerEventId: result.id,
+        });
       } catch (err) {
         console.error(`[NUDGR_TRIGGER] nudgeId=${nudge.id} result=FAILED error=${err.message}`);
+        await recordRuntimeStatus('TRIGGER_WRITE_FAILED', err.message, { nudgeId: nudge.id });
       }
     }
   }
@@ -226,6 +242,7 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
 
   const identifiers = enterRegions.map((r) => r.identifier).filter(Boolean);
   console.log(`[BG_TASK_EXECUTE] Geofence ENTER event received for regions: ${identifiers.join(', ')}`);
+  await recordRuntimeStatus('GEOFENCE_ENTER', 'Android OS delivered ENTER event', { regionIds: identifiers });
 
   // Initialize Firebase early in background task
   try {
@@ -243,6 +260,18 @@ TaskManager.defineTask(GEOFENCE_TASK, async ({ data, error }) => {
       `longitude=${reg.longitude}\n` +
       `radius=${reg.radius}m\n` +
       `task name=${GEOFENCE_TASK}`
+    );
+
+    // This must happen before any Firebase or GPS work. It is the isolated
+    // proof that Android woke the app for the ENTER transition.
+    const diagnosticNotificationId = await showGeofenceEnterNotification({
+      regionId: reg.identifier,
+      enteredAt: new Date(),
+    });
+    await recordRuntimeStatus(
+      'GEOFENCE_SELF_NOTIFICATION',
+      diagnosticNotificationId ? 'Entered-geofence self notification posted' : 'Entered-geofence self notification failed',
+      { regionId: reg.identifier, notificationId: diagnosticNotificationId }
     );
 
     let coords = null;
@@ -333,6 +362,17 @@ export async function registerGeofencesForNudges(nudges) {
   }
 
   const currentUid = await resolveSenderUid();
+  if (!currentUid) {
+    console.warn('[BG_GEOFENCE_DEBUG] Refusing registration because sender identity is unavailable');
+    return { success: 0, failed: nudges.length, reason: 'sender-uid-unavailable' };
+  }
+  // Defense in depth: callers must never be able to register recipient Nudgrs
+  // on this phone, even if a future subscription is wired incorrectly.
+  const senderNudges = nudges.filter((n) => n?.id && n.senderUid === currentUid);
+  const rejectedRecipientNudges = nudges.length - senderNudges.length;
+  if (rejectedRecipientNudges) {
+    console.warn(`[BG_GEOFENCE_DEBUG] Rejected ${rejectedRecipientNudges} non-sender geofence candidates`);
+  }
   const isTaskDefined = TaskManager.isTaskDefined(GEOFENCE_TASK);
   let isTaskRegistered = false;
   try {
@@ -345,24 +385,25 @@ export async function registerGeofencesForNudges(nudges) {
     `isTaskDefined=${isTaskDefined}\n` +
     `isTaskRegistered=${isTaskRegistered}\n` +
     `current user UID=${currentUid || 'unknown'}\n` +
-    `candidate nudges count=${nudges.length}`
+    `candidate nudges count=${nudges.length}\n` +
+    `sender-owned candidates=${senderNudges.length}`
   );
 
   const hasPerm = await ensureLocationPermissions();
   if (!hasPerm) {
     console.warn('[BG_GEOFENCE_DEBUG] Cannot register geofences: Background location permission not granted');
-    return { success: 0, failed: nudges.length, reason: 'permission-denied' };
+    return { success: 0, failed: senderNudges.length, reason: 'permission-denied' };
   }
 
   // Persist nudges to AsyncStorage so headless task has instant offline access
   try {
-    await AsyncStorage.setItem(GEOFENCE_NUDGES_STORAGE_KEY, JSON.stringify(nudges));
-    console.log(`[BG_GEOFENCE_DEBUG] Persisted ${nudges.length} nudges to AsyncStorage (${GEOFENCE_NUDGES_STORAGE_KEY})`);
+    await AsyncStorage.setItem(GEOFENCE_NUDGES_STORAGE_KEY, JSON.stringify(senderNudges));
+    console.log(`[BG_GEOFENCE_DEBUG] Persisted ${senderNudges.length} sender nudges to AsyncStorage (${GEOFENCE_NUDGES_STORAGE_KEY})`);
   } catch (err) {
     console.warn('[BG_GEOFENCE_DEBUG] Failed to persist nudges to AsyncStorage:', err.message);
   }
 
-  const regions = nudges
+  const regions = senderNudges
     .filter(n => 
       typeof n.triggerLatitude === 'number' &&
       typeof n.triggerLongitude === 'number' &&
@@ -380,7 +421,7 @@ export async function registerGeofencesForNudges(nudges) {
 
   if (regions.length === 0) {
     console.warn('[BG_GEOFENCE_DEBUG] No valid regions found to register');
-    return { success: 0, failed: nudges.length, reason: 'no-valid-regions' };
+    return { success: 0, failed: senderNudges.length, reason: 'no-valid-regions' };
   }
 
   try {
@@ -393,7 +434,7 @@ export async function registerGeofencesForNudges(nudges) {
     const verifiedAfter = await TaskManager.isTaskRegisteredAsync(GEOFENCE_TASK);
     console.log(`[BG_TASK_REGISTER] Task ${GEOFENCE_TASK} verified with TaskManager after startGeofencing: ${verifiedAfter}`);
 
-    for (const n of nudges) {
+    for (const n of senderNudges) {
       console.log(
         `[NUDGR_GEOFENCE_REGISTER]\n` +
         `nudge ID=${n.id}\n` +
@@ -412,11 +453,16 @@ export async function registerGeofencesForNudges(nudges) {
     // Verify registration with Android OS
     const verified = await getRegisteredGeofences();
     console.log(`[BG_GEOFENCE_DEBUG] Verified with Android OS: started=${verified.isStarted}, registered=${verified.isRegistered}, count=${verified.regions.length}`);
+    await recordRuntimeStatus('GEOFENCE_REGISTERED', 'Sender-only regions registered with Android OS', {
+      count: regions.length,
+      regionIds: regions.map((region) => region.identifier),
+    });
 
     return { success: regions.length, failed: 0 };
   } catch (e) {
     console.error('[BG_GEOFENCE_DEBUG] Failed to startGeofencingAsync:', e.message);
-    for (const n of nudges) {
+    await recordRuntimeStatus('GEOFENCE_REGISTRATION_FAILED', e.message, { count: regions.length });
+    for (const n of senderNudges) {
       console.error(
         `[NUDGR_GEOFENCE_REGISTER]\n` +
         `nudge ID=${n.id}\n` +
@@ -450,6 +496,16 @@ export async function stopGeofences() {
     }
   } catch (e) {
     if (__DEV__) console.warn('[stopGeofences]', e.message);
+  }
+}
+
+/** Removes cached regions when this user no longer owns active sender Nudgrs. */
+export async function clearPersistedSenderGeofences() {
+  try {
+    await AsyncStorage.removeItem(GEOFENCE_NUDGES_STORAGE_KEY);
+    await recordRuntimeStatus('GEOFENCE_CACHE_CLEARED', 'No sender geofences remain on this device');
+  } catch (error) {
+    console.warn('[BG_GEOFENCE_DEBUG] Could not clear sender geofence cache:', error?.message || error);
   }
 }
 

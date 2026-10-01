@@ -6,7 +6,10 @@ export const NUDGR_ALERTS_CHANNEL_ID = 'nudgr_alerts';
 // Android channel sound settings are immutable after first creation. The v2 id
 // ensures devices that previously created nudgr_calls with a bad sound get the
 // corrected ringtone configuration.
-export const NUDGR_CALLS_CHANNEL_ID = 'nudgr_calls_v2';
+// Bump this whenever incoming-call channel settings change. Android channels
+// are immutable after their first creation, so reusing an older id preserves
+// a broken sound/vibration setup forever on installed devices.
+export const NUDGR_CALLS_CHANNEL_ID = 'nudgr_calls_v3';
 export const NUDGR_DEFAULT_CHANNEL_ID = 'default';
 export const NUDGR_TEST_CHANNEL_ID = 'nudgr-test';
 export const NUDGR_INCOMING_CATEGORY = 'nudgr_incoming';
@@ -214,6 +217,30 @@ export async function showLocalNudgeNotification(nudge) {
   }
 }
 
+/** A sender-side proof that Android delivered an OS geofence ENTER event. */
+export async function showGeofenceEnterNotification({ regionId, enteredAt = new Date() }) {
+  const time = enteredAt.toLocaleTimeString();
+  try {
+    await setupNotificationChannels();
+    const id = await Notifications.scheduleNotificationAsync({
+      content: {
+        title: 'Nudgr geofence ENTER',
+        body: `Entered geofence at ${time}`,
+        data: { type: 'nudgr_geofence_enter', regionId, enteredAt: enteredAt.toISOString() },
+        sound: 'default',
+        priority: Notifications.AndroidNotificationPriority.MAX,
+        channelId: NUDGR_TEST_CHANNEL_ID,
+      },
+      trigger: null,
+    });
+    console.log(`[NUDGR_GEOFENCE_SELF_TEST] region=${regionId || 'unknown'} notificationId=${id}`);
+    return id;
+  } catch (error) {
+    console.error(`[NUDGR_GEOFENCE_SELF_TEST] result=FAILED error=${error?.message || error}`);
+    return null;
+  }
+}
+
 /**
  * Displays a high-priority incoming call-style notification for a Nudgr.
  * @param {object} params - { nudgeId, senderName, message }
@@ -414,8 +441,18 @@ export async function getNotificationDiagnostics() {
  */
 export async function dismissIncomingNudgeNotification(nudgeId) {
   try {
-    await Notifications.dismissAllNotificationsAsync();
-    console.log('[NOTIFICATION_DEBUG] Dismissed active notifications');
+    const markerKey = nudgeId ? `${INCOMING_NOTIFICATION_KEY_PREFIX}${nudgeId}` : null;
+    const notificationId = markerKey ? await AsyncStorage.getItem(markerKey) : null;
+    if (notificationId) {
+      await Notifications.dismissNotificationAsync(notificationId);
+      await AsyncStorage.removeItem(markerKey);
+      console.log(`[NOTIFICATION_DEBUG] Dismissed incoming notification nudgeId=${nudgeId}`);
+    } else if (!nudgeId) {
+      await Notifications.dismissAllNotificationsAsync();
+      const keys = await AsyncStorage.getAllKeys();
+      await AsyncStorage.multiRemove(keys.filter((key) => key.startsWith(INCOMING_NOTIFICATION_KEY_PREFIX)));
+      console.log('[NOTIFICATION_DEBUG] Dismissed all incoming notifications');
+    }
   } catch (e) {
     console.warn('[NOTIFICATION_DEBUG] Error dismissing notifications:', e.message);
   }

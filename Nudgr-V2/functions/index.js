@@ -54,14 +54,10 @@ exports.sendNudgeOnTrigger = functions.firestore
 
       const senderName = nudge.senderName || 'Someone';
       
-      // Send a high-priority FCM with BOTH a notification payload (so Android OS
-      // can display it natively when the app is killed/backgrounded) AND a data
-      // payload (so the JS handler can process Answer/Decline actions and route
-      // to the correct screen when the app is in the foreground).
-      //
-      // IMPORTANT: data-only FCM will NOT show a system notification when the
-      // React Native JS runtime is not running. Adding android.notification
-      // ensures the OS itself displays the heads-up notification.
+      // Data-only is intentional. An Android `notification` payload bypasses
+      // the app and produces a generic system notification when backgrounded.
+      // High-priority data wakes React Native Firebase's background handler,
+      // which creates the dedicated local call-style notification with actions.
       const nudgeMessage = nudge.message || 'Incoming Nudgr';
       const payload = {
         data: {
@@ -76,31 +72,12 @@ exports.sendNudgeOnTrigger = functions.firestore
         tokens,
         android: {
           priority: 'high',
-          notification: {
-            title: `Incoming Nudgr from ${senderName}`,
-            body: nudgeMessage,
-            channelId: 'nudgr_calls_v2',
-            sound: 'ringtone',
-            priority: 'max',
-            visibility: 'public',
-            tag: `nudgr_${nudgeId}`,
-            defaultSound: false,
-            defaultVibrateTimings: false,
-            vibrateTimingsMillis: [0, 800, 200, 800, 200, 800],
-          },
         },
         apns: {
+          headers: { 'apns-priority': '5' },
           payload: {
             aps: {
               contentAvailable: true,
-              priority: 10,
-              alert: {
-                title: 'Incoming Nudgr',
-                body: `From ${senderName}`,
-              },
-              sound: 'ringtone.mp3',
-              category: 'nudgr_incoming',
-              threadId: nudgeId,
             },
           },
         },
