@@ -32,7 +32,7 @@ export function attachFcmListeners({ onNudgeMessage, onNudgeOpened }) {
   };
 
   const unsubOn = messaging.onMessage((remoteMessage) => {
-    console.log(`[FCM_RECEIVED_FOREGROUND] FCM onMessage messageId=${remoteMessage?.messageId}`);
+    console.log(`[FCM_FOREGROUND_RECEIVED] FCM onMessage messageId=${remoteMessage?.messageId}`);
     const info = handle(remoteMessage);
     if (info?.nudgeId && onNudgeMessage) {
       console.log(`[FCM_RECEIVED_FOREGROUND] nudgeId=${info.nudgeId} senderName=${info.senderName}`);

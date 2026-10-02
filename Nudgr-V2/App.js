@@ -37,12 +37,11 @@ import { recordRuntimeStatus } from './src/diagnostics/runtimeStatus';
 
 // Register background message handler at module scope for headless FCM wakeups.
 // This MUST execute before any React component mounts.
-// Since the Cloud Function now sends notification+data FCM, Android OS will
-// display the notification natively even if this handler fails. This handler
-// enhances the notification with Answer/Decline actions via expo-notifications.
+// Notification+data provides a native fallback. Expo uses the same Android
+// tag/id to replace it with Answer/Decline actions in a single notification slot.
 messaging().setBackgroundMessageHandler(async (remoteMessage) => {
   try {
-    console.log('[FCM_RECEIVED_BACKGROUND] Background message handler started');
+    console.log('[FCM_BACKGROUND_RECEIVED] Background message handler started');
     const data = remoteMessage?.data || {};
     const nudgeId = data?.nudgeId;
     const senderName = data?.senderName || 'Someone';
@@ -57,6 +56,7 @@ messaging().setBackgroundMessageHandler(async (remoteMessage) => {
         nudgeId,
         senderName,
         message,
+        replaceNativeNotification: Platform.OS === 'android' && !!remoteMessage?.notification,
       });
       console.log(`[FCM_NOTIFICATION_CREATED] nudgeId=${nudgeId} notificationId=${notifId || 'FAILED'}`);
       await recordRuntimeStatus('INCOMING_NOTIFICATION', notifId ? 'Call-style incoming notification posted' : 'Incoming notification failed', { nudgeId, notificationId: notifId });

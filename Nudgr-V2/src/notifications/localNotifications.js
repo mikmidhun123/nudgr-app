@@ -246,7 +246,7 @@ export async function showGeofenceEnterNotification({ regionId, enteredAt = new 
  * @param {object} params - { nudgeId, senderName, message }
  * @returns {Promise<string|null>} Notification identifier
  */
-export async function showIncomingNudgeNotification({ nudgeId, senderName, message }) {
+export async function showIncomingNudgeNotification({ nudgeId, senderName, message, replaceNativeNotification = false }) {
   if (!nudgeId) {
     console.warn('[NOTIFICATION_DEBUG] showIncomingNudgeNotification missing nudgeId');
     return null;
@@ -258,7 +258,9 @@ export async function showIncomingNudgeNotification({ nudgeId, senderName, messa
 
   const markerKey = `${INCOMING_NOTIFICATION_KEY_PREFIX}${nudgeId}`;
   const existing = await AsyncStorage.getItem(markerKey).catch(() => null);
-  if (existing) {
+  // A later native FCM alert may have overwritten a notification previously
+  // posted by the Firestore listener. Reapply its actions even with a marker.
+  if (existing && !replaceNativeNotification) {
     console.log(`[NUDGR_NOTIFICATION] nudgeId=${nudgeId} result=DEDUPLICATED notificationId=${existing}`);
     return existing;
   }
@@ -291,7 +293,10 @@ export async function showIncomingNudgeNotification({ nudgeId, senderName, messa
         console.warn(`[NUDGR_NOTIFICATION] nudgeId=${nudgeId} permission check error: ${permErr.message}, proceeding`);
       }
 
+      // FCM and Expo both post Android notifications with native id=0.
+      // Matching FCM's tag updates that notification in place with actions.
       const id = await Notifications.scheduleNotificationAsync({
+        identifier: `nudgr_${nudgeId}`,
         content: {
           title,
           body,
@@ -307,11 +312,12 @@ export async function showIncomingNudgeNotification({ nudgeId, senderName, messa
           categoryIdentifier: NUDGR_INCOMING_CATEGORY,
           sticky: false,
         },
-        trigger: null, // Deliver immediately
+        trigger: Platform.OS === 'android' ? { channelId: NUDGR_CALLS_CHANNEL_ID } : null,
       });
 
       await AsyncStorage.setItem(markerKey, id).catch(() => {});
       console.log(`[NUDGR_NOTIFICATION] nudgeId=${nudgeId} result=SUCCESS notificationId=${id} channel=${NUDGR_CALLS_CHANNEL_ID}`);
+      console.log(`[INCOMING_NUDGR_DISPLAYED] nudgeId=${nudgeId} notificationId=${id}`);
       return id;
     } catch (e) {
       console.error(`[NUDGR_NOTIFICATION] nudgeId=${nudgeId} result=FAILED error=${e.message}`);
@@ -442,7 +448,8 @@ export async function getNotificationDiagnostics() {
 export async function dismissIncomingNudgeNotification(nudgeId) {
   try {
     const markerKey = nudgeId ? `${INCOMING_NOTIFICATION_KEY_PREFIX}${nudgeId}` : null;
-    const notificationId = markerKey ? await AsyncStorage.getItem(markerKey) : null;
+    // Also cancel the native fallback if headless JS never saved a marker.
+    const notificationId = markerKey ? (await AsyncStorage.getItem(markerKey)) || `nudgr_${nudgeId}` : null;
     if (notificationId) {
       await Notifications.dismissNotificationAsync(notificationId);
       await AsyncStorage.removeItem(markerKey);
