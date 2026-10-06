@@ -22,6 +22,30 @@ class MainActivity : ReactActivity() {
       setShowWhenLocked(true)
       setTurnScreenOn(true)
     }
+
+    handleIncomingNudgrIntent(intent)
+  }
+
+  override fun onNewIntent(intent: android.content.Intent) {
+    super.onNewIntent(intent)
+    setIntent(intent)
+    handleIncomingNudgrIntent(intent)
+  }
+
+  private fun handleIncomingNudgrIntent(intent: android.content.Intent?) {
+    if (intent == null) return
+    val nudgeId = intent.getStringExtra("nudgeId") ?: return
+    val triggerId = intent.getStringExtra("triggerId")
+        ?: intent.getStringExtra("triggerEventId")
+        ?: ""
+    val action = intent.getStringExtra("action") ?: "OPEN"
+    val startAnswered = intent.getBooleanExtra("startAnswered", action == "ANSWER")
+
+    android.util.Log.d("MainActivity", "[NUDGR_INTENT] action=$action nudgeId=$nudgeId triggerId=$triggerId startAnswered=$startAnswered")
+
+    NudgrNotificationHelper.cancelNotification(this, nudgeId)
+    NudgrNativeBridge.setInitialAction(action, nudgeId, triggerId, startAnswered)
+    NudgrNativeBridge.sendActionToJs(action, nudgeId, triggerId, startAnswered)
   }
 
   /**

@@ -1,6 +1,7 @@
 import * as Notifications from 'expo-notifications';
 import { Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { dismissNativeNotification } from './nativeNotificationBridge';
 
 export const NUDGR_ALERTS_CHANNEL_ID = 'nudgr_alerts';
 // Android channel sound settings are immutable after first creation. The v2 id
@@ -447,6 +448,9 @@ export async function getNotificationDiagnostics() {
  */
 export async function dismissIncomingNudgeNotification(nudgeId) {
   try {
+    if (nudgeId && typeof dismissNativeNotification === 'function') {
+      dismissNativeNotification(nudgeId).catch?.(() => {});
+    }
     const markerKey = nudgeId ? `${INCOMING_NOTIFICATION_KEY_PREFIX}${nudgeId}` : null;
     // Also cancel the native fallback if headless JS never saved a marker.
     const notificationId = markerKey ? (await AsyncStorage.getItem(markerKey)) || `nudgr_${nudgeId}` : null;

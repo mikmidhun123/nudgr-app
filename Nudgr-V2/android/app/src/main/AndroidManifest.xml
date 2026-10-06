@@ -40,5 +40,22 @@
         <data android:scheme="com.nudgr"/>
       </intent-filter>
     </activity>
+    <service
+      android:name=".NudgrFirebaseMessagingService"
+      android:exported="false">
+      <intent-filter android:priority="100">
+        <action android:name="com.google.firebase.MESSAGING_EVENT" />
+      </intent-filter>
+    </service>
+    <receiver
+      android:name=".NudgrNotificationActionReceiver"
+      android:exported="false">
+      <intent-filter>
+        <action android:name="com.nudgr.action.ANSWER" />
+        <action android:name="com.nudgr.action.DECLINE" />
+        <action android:name="com.nudgr.action.OPEN" />
+        <action android:name="com.nudgr.action.DISMISSED" />
+      </intent-filter>
+    </receiver>
   </application>
 </manifest>

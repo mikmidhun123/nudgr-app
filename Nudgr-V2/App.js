@@ -22,6 +22,12 @@ import {
 } from './src/fcm/tokens';
 import { attachFcmListeners } from './src/fcm/delivery';
 import { startTriggerEngine } from './src/location/triggerEngine';
+import {
+  getInitialNativeAction,
+  clearInitialNativeAction,
+  isNativeNotificationActive,
+  addNativeActionListener,
+} from './src/notifications/nativeNotificationBridge';
 import { subscribeReceivedNudges, subscribeSentNudges, isNudgeActive, NUDGE_STATUS } from './src/db/nudges';
 import ErrorBoundary from './src/ui/ErrorBoundary';
 import AuthScreen from './src/ui/AuthScreen';
@@ -51,15 +57,21 @@ messaging().setBackgroundMessageHandler(async (remoteMessage) => {
     await recordRuntimeStatus('FCM_RECEIVED_BACKGROUND', 'Background FCM data message received', { nudgeId });
 
     if (nudgeId) {
-      console.log(`[FCM_HANDLER_STARTED] nudgeId=${nudgeId} creating local notification with actions`);
-      const notifId = await showIncomingNudgeNotification({
-        nudgeId,
-        senderName,
-        message,
-        replaceNativeNotification: Platform.OS === 'android' && !!remoteMessage?.notification,
-      });
-      console.log(`[FCM_NOTIFICATION_CREATED] nudgeId=${nudgeId} notificationId=${notifId || 'FAILED'}`);
-      await recordRuntimeStatus('INCOMING_NOTIFICATION', notifId ? 'Call-style incoming notification posted' : 'Incoming notification failed', { nudgeId, notificationId: notifId });
+      const isNativeActive = typeof isNativeNotificationActive === 'function' ? await isNativeNotificationActive(nudgeId) : false;
+      if (isNativeActive) {
+        console.log(`[FCM_HANDLER_NATIVE] nudgeId=${nudgeId} native Android notification already active with actions`);
+        await recordRuntimeStatus('INCOMING_NOTIFICATION', 'Native incoming notification active with actions', { nudgeId });
+      } else {
+        console.log(`[FCM_HANDLER_STARTED] nudgeId=${nudgeId} creating fallback local notification with actions`);
+        const notifId = await showIncomingNudgeNotification({
+          nudgeId,
+          senderName,
+          message,
+          replaceNativeNotification: Platform.OS === 'android' && !!remoteMessage?.notification,
+        });
+        console.log(`[FCM_NOTIFICATION_CREATED] nudgeId=${nudgeId} notificationId=${notifId || 'FAILED'}`);
+        await recordRuntimeStatus('INCOMING_NOTIFICATION', notifId ? 'Call-style incoming notification posted' : 'Incoming notification failed', { nudgeId, notificationId: notifId });
+      }
     } else {
       console.warn('[FCM_RECEIVED_BACKGROUND] No nudgeId in background message data');
     }
@@ -243,9 +255,36 @@ export default function App() {
       }
     });
 
+    // Handle native Android notification actions (ANSWER, DECLINE, OPEN)
+    const handleNativeAction = (event) => {
+      if (!event || !event.nudgeId) return;
+      const { action, nudgeId, startAnswered } = event;
+      console.log(`[NATIVE_NOTIFICATION_ACTION] nudgeId=${nudgeId} action=${action || 'DEFAULT'} startAnswered=${startAnswered}`);
+      if (action === 'ANSWER' || startAnswered) {
+        handleAnswerAction(nudgeId);
+      } else if (action === 'DECLINE') {
+        dismissIncoming();
+      } else {
+        dismissIncoming();
+        showIncoming(nudgeId);
+      }
+    };
+
+    const nativeActionSub = addNativeActionListener(handleNativeAction);
+
+    // Check for cold start from native notification action (e.g. Answer pressed on lock screen / killed state)
+    getInitialNativeAction().then((initial) => {
+      if (initial && initial.nudgeId) {
+        console.log('[NOTIFICATION_DEBUG] Cold start from native notification action:', JSON.stringify(initial));
+        handleNativeAction(initial);
+        clearInitialNativeAction();
+      }
+    });
+
     return () => {
       responseSub.remove();
       bgNotificationSub();
+      nativeActionSub();
     };
   }, []);
 
