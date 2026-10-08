@@ -27,6 +27,10 @@ class NudgrNotificationActionReceiver : BroadcastReceiver() {
 
         Log.d(TAG, "[ACTION_RECEIVED] action=$action nudgeId=$nudgeId triggerId=$triggerId")
 
+        // Commit before this receiver exits, even when React has never started.
+        val state = if (action == ACTION_ANSWER) "answered" else "declined"
+        NudgrIncomingState.set(context, nudgeId, state)
+
         // 1. Cancel the native notification immediately
         NudgrNotificationHelper.cancelNotification(context, nudgeId)
 

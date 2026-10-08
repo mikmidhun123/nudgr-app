@@ -3,6 +3,27 @@ import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
 const { NudgrNativeModule } = NativeModules;
 const eventEmitter = NudgrNativeModule ? new NativeEventEmitter(NudgrNativeModule) : null;
 
+// null means an older/non-Android build needs the existing Expo fallback.
+export async function showNativeIncomingNotification({ nudgeId, triggerId = '', senderName = 'Someone', message = 'Incoming Nudgr' }) {
+  if (Platform.OS !== 'android' || !NudgrNativeModule?.showIncomingNotification) return null;
+  return NudgrNativeModule.showIncomingNotification(nudgeId, triggerId, senderName, message);
+}
+
+export async function getNativeIncomingState(nudgeId = null) {
+  if (Platform.OS !== 'android' || !NudgrNativeModule?.getIncomingState) return null;
+  return NudgrNativeModule.getIncomingState(nudgeId);
+}
+
+export async function recordNativeIncoming(nudgeId, triggerId = '', senderName = '') {
+  if (Platform.OS !== 'android' || !NudgrNativeModule?.recordIncoming) return false;
+  return NudgrNativeModule.recordIncoming(nudgeId, triggerId, senderName);
+}
+
+export async function setNativeIncomingState(nudgeId, state, senderName = '') {
+  if (Platform.OS !== 'android' || !NudgrNativeModule?.setIncomingState) return;
+  await NudgrNativeModule.setIncomingState(nudgeId, state, senderName);
+}
+
 /**
  * Checks for any pending native notification action from a cold-start intent.
  * Resolves with { action: 'ANSWER' | 'DECLINE' | 'OPEN', nudgeId, triggerId, startAnswered } or null.

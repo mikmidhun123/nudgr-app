@@ -50,7 +50,12 @@ function backend({ tokens = { testToken: true }, result, sendError, cleanupError
   };
   const exports = {};
   vm.runInNewContext(fs.readFileSync(path.join(root, 'functions/index.js'), 'utf8'), {
-    exports, require: name => name === 'firebase-admin' ? admin : functions,
+    exports, require(name) {
+      if (name === 'firebase-admin/app') return { initializeApp: admin.initializeApp };
+      if (name === 'firebase-admin/firestore') return { getFirestore: admin.firestore, FieldValue: admin.firestore.FieldValue };
+      if (name === 'firebase-admin/messaging') return { getMessaging: admin.messaging };
+      return functions;
+    },
   });
   const run = () => exports.sendNudgeOnTrigger({ data: () => ({ status: 'CREATED' }), ref }, {
     params: { nudgeId: 'nudge1', triggerEventId: 'trigger1' },
@@ -81,6 +86,18 @@ test('notification + data uses the installed Admin SDK schema and marks acceptan
   assert.equal(fixture.event.status, 'FCM_SENT');
   assert.equal(fixture.event.fcmSuccessCount, 1);
   assert.ok(fixture.logs.every(log => !log.includes('testToken')));
+});
+
+test('backend loads with the installed Admin SDK modular exports', () => {
+  const { createRequire } = require('node:module');
+  const fromFunctions = createRequire(path.join(root, 'functions/index.js'));
+  assert.equal(typeof fromFunctions('firebase-admin/app').initializeApp, 'function');
+  assert.equal(typeof fromFunctions('firebase-admin/firestore').getFirestore, 'function');
+  assert.equal(typeof fromFunctions('firebase-admin/messaging').getMessaging, 'function');
+  const source = fs.readFileSync(path.join(root, 'functions/index.js'), 'utf8');
+  const exports = {};
+  vm.runInNewContext(source, { exports, require: fromFunctions });
+  assert.equal(typeof exports.sendNudgeOnTrigger, 'function');
 });
 
 test('missing tokens record failure without sending', async () => {
@@ -123,13 +140,14 @@ test('concurrent or repeated onCreate snapshots send only once', async () => {
   assert.equal(fixture.payloads.length, 1);
 });
 
-function notificationsFixture({ permissionError = false } = {}) {
+function notificationsFixture({ permissionError = false, incomingState = null, nativeActive = false, nativeHandled = null, appState = 'active' } = {}) {
   const requests = [];
   const categories = [];
   const channels = [];
   const dismissed = [];
   const store = new Map();
   let permissionRequests = 0;
+  const nativePosts = [];
   const notifications = {
     setNotificationHandler() {},
     async getPermissionsAsync() {
@@ -157,13 +175,19 @@ function notificationsFixture({ permissionError = false } = {}) {
   const exports = {};
   vm.runInNewContext(source, { exports, console: quiet, __DEV__: false, require(name) {
     if (name === 'expo-notifications') return notifications;
-    if (name === 'react-native') return { Platform: { OS: 'android' } };
+    if (name === 'react-native') return { Platform: { OS: 'android' }, AppState: { currentState: appState } };
+    if (name === './incomingState') return { getIncomingState: async () => incomingState, INCOMING_STATES: { RINGING: 'ringing' } };
+    if (name === './nativeNotificationBridge') return {
+      dismissNativeNotification: async () => {},
+      isNativeNotificationActive: async () => nativeActive,
+      showNativeIncomingNotification: async params => { nativePosts.push(params); return nativeHandled; },
+    };
     return { __esModule: true, default: storage };
   } });
-  return { exports, requests, categories, channels, dismissed, store, permissionRequests: () => permissionRequests };
+  return { exports, requests, categories, channels, dismissed, store, nativePosts, permissionRequests: () => permissionRequests };
 }
 
-test('headless local enhancement matches the native slot, uses call channel/actions, and deduplicates', async () => {
+test('legacy Expo fallback uses the call channel/actions and deduplicates', async () => {
   const fixture = notificationsFixture();
   const params = { nudgeId: 'nudge1', senderName: 'Alice', message: 'Hello' };
   await Promise.all([fixture.exports.showIncomingNudgeNotification(params), fixture.exports.showIncomingNudgeNotification(params)]);
@@ -183,6 +207,90 @@ test('headless local enhancement matches the native slot, uses call channel/acti
   await fixture.exports.dismissIncomingNudgeNotification('nudge1');
   assert.deepEqual(fixture.dismissed, ['nudgr_nudge1']);
   assert.equal(fixture.store.size, 0);
+});
+
+test('background Firestore notification uses the native poster and never replaces its actions with Expo', async () => {
+  const fixture = notificationsFixture({ appState: 'background', nativeHandled: true });
+  const id = await fixture.exports.showIncomingNudgeNotification({ nudgeId: 'nudge1', triggerId: 'trigger1' });
+  assert.equal(id, 'nudgr_nudge1');
+  assert.equal(fixture.nativePosts.length, 1);
+  assert.equal(fixture.nativePosts[0].triggerId, 'trigger1');
+  assert.equal(fixture.requests.length, 0);
+});
+
+test('foreground Firestore cannot overwrite an active native call notification', async () => {
+  const fixture = notificationsFixture({ nativeActive: true });
+  assert.equal(await fixture.exports.showIncomingNudgeNotification({ nudgeId: 'nudge1' }), 'nudgr_nudge1');
+  assert.equal(fixture.requests.length, 0);
+});
+
+test('a durable cold Decline suppresses Firestore notification replay after process restart', async () => {
+  const fixture = notificationsFixture({ incomingState: { nudgeId: 'nudge1', state: 'declined' }, appState: 'background', nativeHandled: true });
+  assert.equal(await fixture.exports.showIncomingNudgeNotification({ nudgeId: 'nudge1' }), null);
+  assert.equal(fixture.requests.length, 0);
+  assert.equal(fixture.nativePosts.length, 0);
+});
+
+test('per-Nudgr cold Decline is retained even when another Nudgr is the current JS state', async () => {
+  const source = babel.transformSync(fs.readFileSync(path.join(root, 'src/notifications/incomingState.js'), 'utf8'), {
+    configFile: false, babelrc: false, plugins: ['@babel/plugin-transform-modules-commonjs'],
+  }).code;
+  const exports = {};
+  vm.runInNewContext(source, { exports, console: quiet, __DEV__: false, require(name) {
+    if (name === './nativeNotificationBridge') return {
+      getNativeIncomingState: async id => ({ nudgeId: id, state: 'declined', timestamp: 1 }),
+    };
+    return { __esModule: true, default: { getItem: async () => JSON.stringify({ nudgeId: 'another', state: 'ringing', timestamp: Date.now() }) } };
+  } });
+  const state = await exports.getIncomingState('declined-nudge');
+  assert.equal(state.nudgeId, 'declined-nudge');
+  assert.equal(state.state, 'declined');
+});
+
+test('module-scope headless callback uses the native poster with the trigger ID', async () => {
+  const source = fs.readFileSync(path.join(root, 'App.js'), 'utf8');
+  const ast = parser.parse(source, { sourceType: 'module', plugins: ['jsx'] });
+  const registration = ast.program.body.find(node => node.type === 'ExpressionStatement'
+    && node.expression.callee?.property?.name === 'setBackgroundMessageHandler');
+  let callback;
+  const posted = [];
+  vm.runInNewContext(source.slice(registration.start, registration.end), {
+    messaging: () => ({ setBackgroundMessageHandler: handler => { callback = handler; } }),
+    showNativeIncomingNotification: async params => { posted.push(params); return true; },
+    showIncomingNudgeNotification: async () => { throw new Error('Expo must not replace native posting'); },
+    recordRuntimeStatus: async () => {}, console: quiet,
+  });
+  await callback({ notification: { title: 'Nudgr' }, data: { nudgeId: 'nudge1', triggerEventId: 'trigger1', senderName: 'Alice', message: 'Hello' } });
+  assert.equal(posted.length, 1);
+  assert.equal(posted[0].triggerId, 'trigger1');
+});
+
+test('token registration and refresh serialize to the nested map read by the backend', async () => {
+  const { Firestore } = require('../functions/node_modules/@google-cloud/firestore');
+  const firestore = new Firestore({ projectId: 'offline-test' });
+  const writes = [];
+  let refresh;
+  const ref = { async set(data, options) {
+    assert.equal(options.merge, true);
+    writes.push(firestore._serializer.encodeFields(data));
+  } };
+  const source = babel.transformSync(fs.readFileSync(path.join(root, 'src/fcm/tokens.js'), 'utf8'), {
+    configFile: false, babelrc: false, plugins: ['@babel/plugin-transform-modules-commonjs'],
+  }).code;
+  const exports = {};
+  vm.runInNewContext(source, { exports, console: quiet, __DEV__: false, require() { return {
+    getAuth: () => ({ currentUser: { uid: 'recipient' } }),
+    getMessaging: () => ({ getToken: async () => 'initial-token', onTokenRefresh: callback => { refresh = callback; } }),
+    getFirestore: () => ({ collection: () => ({ doc: () => ref }) }),
+    getServerTimestamp: () => 1,
+  }; } });
+  await exports.syncFcmToken({ uid: 'recipient' });
+  exports.attachFcmTokenRefresh();
+  refresh('rotated-token');
+  assert.equal(writes.length, 2);
+  assert.equal(writes[0].fcmTokens.mapValue.fields['initial-token'].booleanValue, true);
+  assert.equal(writes[1].fcmTokens.mapValue.fields['rotated-token'].booleanValue, true);
+  assert.ok(writes.every(write => !Object.keys(write).some(key => key.startsWith('fcmTokens.'))));
 });
 
 test('actual module-scope background callback handles notification + data without interactive permissions', async () => {
@@ -246,6 +354,65 @@ test('foreground FCM keeps the existing local notification callback', async () =
   assert.equal(received.length, 1);
   assert.equal(received[0].id, 'nudge1');
   assert.equal(received[0].info.senderName, 'Alice');
+});
+
+test('cold native OPEN through Expo preserves ringing until the incoming UI is ready', () => {
+  const source = fs.readFileSync(path.join(root, 'App.js'), 'utf8');
+  const ast = parser.parse(source, { sourceType: 'module', plugins: ['jsx'] });
+  let handler;
+  function visit(node) {
+    if (!node || typeof node !== 'object') return;
+    if (node.type === 'VariableDeclarator' && node.id.name === 'handleNotificationResponse') handler = node;
+    for (const value of Object.values(node)) {
+      if (Array.isArray(value)) value.forEach(visit);
+      else if (value && typeof value === 'object') visit(value);
+    }
+  }
+  visit(ast);
+  const opened = [], answered = [];
+  const context = {
+    console: quiet,
+    showIncoming: id => opened.push(id),
+    handleAnswerAction: id => answered.push(id),
+    dismissIncoming: () => { throw new Error('Cold OPEN must preserve native ringing'); },
+    navigate: () => { throw new Error('Native call OPEN must use the incoming UI'); },
+  };
+  vm.createContext(context);
+  vm.runInContext(`const ${source.slice(handler.start, handler.end)}; globalThis.handle = handleNotificationResponse;`, context);
+  const response = action => ({ actionIdentifier: 'expo.modules.notifications.actions.DEFAULT',
+    notification: { request: { content: { data: { nudgeId: 'cold-call', action, startAnswered: action === 'ANSWER' } } } } });
+  context.handle(response('OPEN'));
+  context.handle(response('ANSWER'));
+  assert.deepEqual(opened, ['cold-call']);
+  assert.deepEqual(answered, ['cold-call']);
+});
+
+test('Android ringtone can start and preload without the missing Expo filesystem module', async () => {
+  const source = babel.transformSync(fs.readFileSync(path.join(root, 'src/notifications/ringtone.js'), 'utf8'), {
+    configFile: false, babelrc: false, plugins: ['@babel/plugin-transform-modules-commonjs'],
+  }).code;
+  const exports = {};
+  let loads = 0, stops = 0, unloads = 0;
+  vm.runInNewContext(source, { exports, console: quiet, __DEV__: false, require(name) {
+    if (name === 'react-native') return { Platform: { OS: 'android' } };
+    if (name === 'expo-av') return { Audio: {
+      setAudioModeAsync: async () => {},
+      Sound: { async createAsync(asset, status, callback, downloadFirst = true) {
+        if (downloadFirst) throw new Error("ExpoAsset.downloadAsync: AppDirectories module not found");
+        loads++;
+        return { sound: { stopAsync: async () => { stops++; }, unloadAsync: async () => { unloads++; } } };
+      } },
+    } };
+    return 123; // Metro's bundled raw-resource reference.
+  } });
+  assert.equal(await exports.startRingtone(), true);
+  assert.equal(exports.isRingtonePlaying(), true);
+  await exports.stopRingtone();
+  assert.equal(exports.isRingtonePlaying(), false);
+  await exports.preloadRingtone();
+  assert.equal(loads, 2);
+  assert.equal(stops, 1);
+  assert.equal(unloads, 2);
 });
 
 test('all app JavaScript parses, including JSX and background registration', () => {

@@ -30,7 +30,7 @@ class NudgrFirebaseMessagingService : ReactNativeFirebaseMessagingService() {
                 if (!isForeground) {
                     // App is in the background or killed/removed from recents:
                     // 1. Build and post the incoming Nudgr notification natively with Answer and Decline actions!
-                    NudgrNotificationHelper.showIncomingNotification(
+                    val handled = NudgrNotificationHelper.showIncomingNotification(
                         context = this,
                         nudgeId = nudgeId,
                         triggerId = triggerId,
@@ -41,10 +41,14 @@ class NudgrFirebaseMessagingService : ReactNativeFirebaseMessagingService() {
                     // 2. Suppress the FCM SDK default buttonless notification display.
                     // Google Play Services checks "gcm.n.e" and "gcm.notification.e" to display default notifications.
                     // Removing these keys prevents FCM from showing a second buttonless fallback notification.
-                    extras.remove("gcm.n.e")
-                    extras.remove("gcm.notification.e")
-                    extras.remove("gcm.notification.title")
-                    extras.remove("gcm.notification.body")
+                    if (handled) {
+                        // Intent.extras is a copy. Suppress auto-display on the actual Intent,
+                        // including duplicate deliveries of an already declined incoming Nudgr.
+                        intent.removeExtra("gcm.n.e")
+                        intent.removeExtra("gcm.notification.e")
+                        intent.removeExtra("gcm.notification.title")
+                        intent.removeExtra("gcm.notification.body")
+                    }
                 } else {
                     // When foregrounded, keep the existing JS/Expo notification behavior.
                     Log.d(TAG, "[FCM_NATIVE_FOREGROUND] App in foreground, delegating to JS handler")
@@ -54,7 +58,7 @@ class NudgrFirebaseMessagingService : ReactNativeFirebaseMessagingService() {
             Log.e(TAG, "[FCM_NATIVE_ERROR] Error handling incoming intent", e)
         }
 
-        // Pass to super so RNFirebase and headless background handler still receive the event
+        // Preserve Firebase lifecycle/token handling. RN Firebase's separate receiver starts headless JS.
         try {
             super.handleIntent(intent)
         } catch (e: Exception) {
@@ -74,15 +78,13 @@ class NudgrFirebaseMessagingService : ReactNativeFirebaseMessagingService() {
             Log.d(TAG, "[FCM_ON_MESSAGE_RECEIVED] isForeground=$isForeground nudgeId=$nudgeId triggerId=$triggerId")
 
             if (!nudgeId.isNullOrEmpty() && !isForeground) {
-                if (!NudgrNotificationHelper.isNotificationActive(nudgeId)) {
-                    NudgrNotificationHelper.showIncomingNotification(
+                NudgrNotificationHelper.showIncomingNotification(
                         context = this,
                         nudgeId = nudgeId,
                         triggerId = triggerId,
                         senderName = senderName,
                         message = message
-                    )
-                }
+                )
             }
         } catch (e: Exception) {
             Log.e(TAG, "[FCM_ON_MESSAGE_ERROR] Error in onMessageReceived", e)

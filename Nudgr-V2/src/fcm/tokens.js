@@ -23,7 +23,7 @@ export async function syncFcmToken(firebaseUser) {
   try {
     await userRef(uid).set({
       uid,
-      [`fcmTokens.${token}`]: true,
+      fcmTokens: { [token]: true },
       updatedAt: getServerTimestamp(),
     }, { merge: true });
     console.log(`[FCM_TOKEN] Token synced to Firestore uid=${uid} tokenPrefix=${token.substring(0, 8)}...`);
@@ -68,7 +68,7 @@ export function attachFcmTokenRefresh() {
     userRef(uid)
       .set({
         uid,
-        [`fcmTokens.${token}`]: true,
+        fcmTokens: { [token]: true },
         updatedAt: getServerTimestamp(),
       }, { merge: true })
       .catch((e) => {

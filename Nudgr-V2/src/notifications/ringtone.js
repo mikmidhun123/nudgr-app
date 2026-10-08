@@ -1,4 +1,5 @@
 import { Audio } from 'expo-av';
+import { Platform } from 'react-native';
 
 let ringtoneSound = null;
 let isPlaying = false;
@@ -11,7 +12,7 @@ let startOperation = null;
  */
 export async function startRingtone() {
   if (isPlaying && ringtoneSound) {
-    return; // Already playing
+    return true; // Already playing
   }
 
   // If a start operation is already in flight, await it
@@ -19,7 +20,7 @@ export async function startRingtone() {
     try {
       await startOperation;
     } catch (_) {}
-    if (isPlaying) return;
+    if (isPlaying) return true;
   }
 
   startOperation = (async () => {
@@ -42,7 +43,10 @@ export async function startRingtone() {
 
       const { sound } = await Audio.Sound.createAsync(
         require('../../assets/sounds/ringtone.mp3'),
-        { shouldPlay: true, isLooping: true, volume: 1.0 }
+        { shouldPlay: true, isLooping: true, volume: 1.0 },
+        null,
+        // Android already packages this as a raw resource; no filesystem download is needed.
+        Platform.OS !== 'android'
       );
       
       ringtoneSound = sound;
@@ -50,7 +54,7 @@ export async function startRingtone() {
       
       if (__DEV__) console.log('[ringtone] Started playing');
     } catch (e) {
-      if (__DEV__) console.warn('[ringtone] start error:', e.message);
+      console.warn('[ringtone] start error:', e.message);
       ringtoneSound = null;
       isPlaying = false;
     } finally {
@@ -59,6 +63,7 @@ export async function startRingtone() {
   })();
 
   await startOperation;
+  return isPlaying;
 }
 
 /**
@@ -107,7 +112,9 @@ export async function preloadRingtone() {
   try {
     const { sound } = await Audio.Sound.createAsync(
       require('../../assets/sounds/ringtone.mp3'),
-      { shouldPlay: false, isLooping: true }
+      { shouldPlay: false, isLooping: true },
+      null,
+      Platform.OS !== 'android'
     );
     await sound.unloadAsync();
     if (__DEV__) console.log('[ringtone] Preloaded');

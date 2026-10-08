@@ -17,7 +17,7 @@ class NudgrNativeModule(reactContext: ReactApplicationContext) : ReactContextBas
     @ReactMethod
     fun isNotificationActive(nudgeId: String, promise: Promise) {
         try {
-            val active = NudgrNotificationHelper.isNotificationActive(nudgeId)
+            val active = NudgrNotificationHelper.isNotificationActive(reactApplicationContext, nudgeId)
             promise.resolve(active)
         } catch (e: Exception) {
             promise.reject("ERROR", e.message)
@@ -25,9 +25,47 @@ class NudgrNativeModule(reactContext: ReactApplicationContext) : ReactContextBas
     }
 
     @ReactMethod
+    fun showIncomingNotification(nudgeId: String, triggerId: String, senderName: String, message: String, promise: Promise) {
+        try {
+            promise.resolve(NudgrNotificationHelper.showIncomingNotification(
+                reactApplicationContext, nudgeId, triggerId, senderName, message
+            ))
+        } catch (e: Exception) {
+            promise.reject("NOTIFICATION_FAILED", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun recordIncoming(nudgeId: String, triggerId: String, senderName: String, promise: Promise) {
+        promise.resolve(NudgrIncomingState.receivedFromForeground(reactApplicationContext, nudgeId, triggerId, senderName))
+    }
+
+    @ReactMethod
+    fun getIncomingState(nudgeId: String?, promise: Promise) {
+        try {
+            val state = NudgrIncomingState.get(reactApplicationContext, nudgeId)
+            promise.resolve(state?.let { Arguments.createMap().apply {
+                putString("nudgeId", it.optString("nudgeId"))
+                putString("triggerId", it.optString("triggerId"))
+                putString("senderName", it.optString("senderName"))
+                putString("state", it.optString("state"))
+                putDouble("timestamp", it.optLong("timestamp").toDouble())
+            } })
+        } catch (e: Exception) {
+            promise.reject("STATE_FAILED", e.message)
+        }
+    }
+
+    @ReactMethod
+    fun setIncomingState(nudgeId: String, state: String, senderName: String, promise: Promise) {
+        NudgrIncomingState.set(reactApplicationContext, nudgeId, state, senderName)
+        promise.resolve(true)
+    }
+
+    @ReactMethod
     fun getInitialAction(promise: Promise) {
         try {
-            val initial = NudgrNativeBridge.pendingInitialAction
+            val initial = NudgrNativeBridge.getInitialAction(reactApplicationContext)
             if (initial != null) {
                 val map = Arguments.createMap().apply {
                     putString("action", initial["action"] as? String ?: "")
@@ -46,7 +84,7 @@ class NudgrNativeModule(reactContext: ReactApplicationContext) : ReactContextBas
 
     @ReactMethod
     fun clearInitialAction(promise: Promise) {
-        NudgrNativeBridge.pendingInitialAction = null
+        NudgrNativeBridge.clearInitialAction(reactApplicationContext)
         promise.resolve(true)
     }
 

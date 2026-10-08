@@ -1,4 +1,5 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
+import { getNativeIncomingState, setNativeIncomingState } from './nativeNotificationBridge';
 
 const INCOMING_STATE_KEY = '@nudgr_incoming_state';
 const RINGING_TIMEOUT_MS = 30000;
@@ -15,11 +16,14 @@ export const INCOMING_STATES = {
  * Gets the current incoming nudge state from AsyncStorage.
  * @returns {Promise<{nudgeId: string, state: string, timestamp: number, senderName: string} | null>}
  */
-export async function getIncomingState() {
+export async function getIncomingState(nudgeId = null) {
   try {
     const stored = await AsyncStorage.getItem(INCOMING_STATE_KEY);
-    if (!stored) return null;
-    const parsed = JSON.parse(stored);
+    const local = stored ? JSON.parse(stored) : null;
+    const native = await getNativeIncomingState(nudgeId);
+    const parsed = nudgeId ? (native || (local?.nudgeId === nudgeId ? local : null))
+      : native && (!local || native.nudgeId === local.nudgeId || native.timestamp >= local.timestamp) ? native : local;
+    if (!parsed || (nudgeId && parsed.nudgeId !== nudgeId)) return null;
     // Check if state is stale (> 30 seconds old for RINGING)
     if (parsed.state === INCOMING_STATES.RINGING) {
       const elapsed = Date.now() - parsed.timestamp;
@@ -49,6 +53,7 @@ export async function setIncomingState(nudgeId, state, senderName) {
       timestamp: Date.now(),
       senderName,
     };
+    await setNativeIncomingState(nudgeId, state, senderName || '');
     await AsyncStorage.setItem(INCOMING_STATE_KEY, JSON.stringify(payload));
     if (__DEV__) console.log('[incomingState] set:', payload);
   } catch (e) {

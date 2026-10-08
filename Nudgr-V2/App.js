@@ -25,7 +25,8 @@ import { startTriggerEngine } from './src/location/triggerEngine';
 import {
   getInitialNativeAction,
   clearInitialNativeAction,
-  isNativeNotificationActive,
+  showNativeIncomingNotification,
+  recordNativeIncoming,
   addNativeActionListener,
 } from './src/notifications/nativeNotificationBridge';
 import { subscribeReceivedNudges, subscribeSentNudges, isNudgeActive, NUDGE_STATUS } from './src/db/nudges';
@@ -38,13 +39,13 @@ import NudgeDetailScreen from './src/ui/NudgeDetailScreen';
 import IncomingNudge from './src/ui/IncomingNudge';
 import ProfileScreen from './src/ui/ProfileScreen';
 import MyConnectionScreen from './src/ui/MyConnectionScreen';
-import { getActiveRingingState } from './src/notifications/incomingState';
+import { getActiveRingingState, getIncomingState, setIncomingState, INCOMING_STATES } from './src/notifications/incomingState';
 import { recordRuntimeStatus } from './src/diagnostics/runtimeStatus';
 
 // Register background message handler at module scope for headless FCM wakeups.
 // This MUST execute before any React component mounts.
-// Notification+data provides a native fallback. Expo uses the same Android
-// tag/id to replace it with Answer/Decline actions in a single notification slot.
+// Android service and headless JS share one native poster, so an asynchronous
+// Expo post cannot replace the call actions/full-screen intent.
 messaging().setBackgroundMessageHandler(async (remoteMessage) => {
   try {
     console.log('[FCM_BACKGROUND_RECEIVED] Background message handler started');
@@ -57,10 +58,12 @@ messaging().setBackgroundMessageHandler(async (remoteMessage) => {
     await recordRuntimeStatus('FCM_RECEIVED_BACKGROUND', 'Background FCM data message received', { nudgeId });
 
     if (nudgeId) {
-      const isNativeActive = typeof isNativeNotificationActive === 'function' ? await isNativeNotificationActive(nudgeId) : false;
-      if (isNativeActive) {
-        console.log(`[FCM_HANDLER_NATIVE] nudgeId=${nudgeId} native Android notification already active with actions`);
-        await recordRuntimeStatus('INCOMING_NOTIFICATION', 'Native incoming notification active with actions', { nudgeId });
+      const nativeHandled = typeof showNativeIncomingNotification === 'function'
+        ? await showNativeIncomingNotification({ nudgeId, triggerId: data.triggerEventId || data.triggerId || '', senderName, message })
+        : null;
+      if (nativeHandled !== null) {
+        console.log(`[FCM_HANDLER_NATIVE] nudgeId=${nudgeId} handled=${nativeHandled}`);
+        await recordRuntimeStatus('INCOMING_NOTIFICATION', nativeHandled ? 'Incoming handled by Android native poster' : 'Android notification blocked', { nudgeId });
       } else {
         console.log(`[FCM_HANDLER_STARTED] nudgeId=${nudgeId} creating fallback local notification with actions`);
         const notifId = await showIncomingNudgeNotification({
@@ -157,18 +160,20 @@ export default function App() {
   const currentUserRef = useRef(null);
   const handledTriggeredNudgesRef = useRef(new Set());
 
-  const showIncoming = (id, startAnswered = false) => {
+  const showIncoming = async (id, startAnswered = false) => {
     const nudgeId = typeof id === 'object' ? id.id : id;
     if (!nudgeId) return;
+    const existing = await getIncomingState(nudgeId);
+    if (!startAnswered && existing && existing.state !== INCOMING_STATES.RINGING) return;
     if (incomingRef.current === nudgeId && !startAnswered) return;
     incomingRef.current = nudgeId;
     setIncomingNudgeId({ id: nudgeId, startAnswered });
   };
 
-  const dismissIncoming = () => {
+  const dismissIncoming = (nudgeId = incomingRef.current) => {
     incomingRef.current = null;
     setIncomingNudgeId(null);
-    dismissIncomingNudgeNotification();
+    dismissIncomingNudgeNotification(nudgeId);
   };
 
   const handleAnswerAction = (nudgeId) => {
@@ -195,18 +200,19 @@ export default function App() {
       }
 
       const nudgeId = data?.nudgeId;
-      const actionId = response?.actionIdentifier;
+      const actionId = data?.action?.split('.').pop() || response?.actionIdentifier;
       
       if (nudgeId) {
         console.log(`[FCM_NOTIFICATION_ACTION] nudgeId=${nudgeId} actionId=${actionId || 'DEFAULT_TAP'}`);
-        if (actionId === 'ANSWER') {
+        if (actionId === 'ANSWER' || data?.startAnswered) {
           handleAnswerAction(nudgeId);
         } else if (actionId === 'DECLINE') {
-          dismissIncoming();
-        } else if (data?.type === 'nudge_incoming') {
+          setIncomingState(nudgeId, INCOMING_STATES.DECLINED, '');
+          handledTriggeredNudgesRef.current.add(nudgeId);
+          dismissIncoming(nudgeId);
+        } else if (data?.type === 'nudge_incoming' || actionId === 'OPEN') {
           // A tap on the call-style local notification returns the recipient
           // to IncomingNudge, not the ordinary Nudgr detail screen.
-          dismissIncoming();
           showIncoming(nudgeId);
         } else {
           dismissIncoming();
@@ -258,14 +264,16 @@ export default function App() {
     // Handle native Android notification actions (ANSWER, DECLINE, OPEN)
     const handleNativeAction = (event) => {
       if (!event || !event.nudgeId) return;
-      const { action, nudgeId, startAnswered } = event;
+      const { nudgeId, startAnswered } = event;
+      const action = event.action?.split('.').pop();
       console.log(`[NATIVE_NOTIFICATION_ACTION] nudgeId=${nudgeId} action=${action || 'DEFAULT'} startAnswered=${startAnswered}`);
       if (action === 'ANSWER' || startAnswered) {
         handleAnswerAction(nudgeId);
-      } else if (action === 'DECLINE') {
-        dismissIncoming();
+      } else if (action === 'DECLINE' || action === 'DISMISSED') {
+        setIncomingState(nudgeId, INCOMING_STATES.DECLINED, '');
+        handledTriggeredNudgesRef.current.add(nudgeId);
+        dismissIncoming(nudgeId);
       } else {
-        dismissIncoming();
         showIncoming(nudgeId);
       }
     };
@@ -360,7 +368,10 @@ export default function App() {
 
     // FCM messaging listeners (preserved for push delivery).
     stopFcmRef.current = attachFcmListeners({
-      onNudgeMessage: (nudgeId, info) => {
+      onNudgeMessage: async (nudgeId, info) => {
+        if (!nudgeId) return;
+        const newTrigger = await recordNativeIncoming(nudgeId, info?.data?.triggerEventId || '', info?.senderName || 'Someone');
+        if (newTrigger) handledTriggeredNudgesRef.current.delete(nudgeId);
         if (!nudgeId || handledTriggeredNudgesRef.current.has(nudgeId)) return;
         handledTriggeredNudgesRef.current.add(nudgeId);
         console.log(`[NUDGR_DELIVERY] nudgeId=${nudgeId} recipientUid=${uid} source=fcm-foreground`);
@@ -374,7 +385,6 @@ export default function App() {
       },
       onNudgeOpened: (nudgeId) => {
         console.log('[NOTIFICATION_DEBUG] FCM message opened for nudge:', nudgeId);
-        dismissIncoming();
         showIncoming(nudgeId);
       },
     });

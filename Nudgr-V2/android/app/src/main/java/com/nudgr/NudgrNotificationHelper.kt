@@ -1,6 +1,5 @@
 package com.nudgr
 
-import android.app.ActivityManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -13,39 +12,32 @@ import android.net.Uri
 import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
-import java.util.concurrent.ConcurrentHashMap
+import androidx.core.app.NotificationManagerCompat
 
 object NudgrNotificationHelper {
     private const val TAG = "NudgrNotifHelper"
     const val CHANNEL_ID = "nudgr_calls_v3"
     const val NOTIFICATION_ID = 0
+    @Volatile private var activityResumed = false
+    // Covers the short interval between notify() and Android publishing its active record.
+    // Actual system records remain authoritative after process restart.
+    private val recentPosts = mutableMapOf<String, Long>()
 
-    // Tracks currently active native notifications
-    private val activeNudges = ConcurrentHashMap<String, Long>()
-
-    fun isNotificationActive(nudgeId: String): Boolean {
-        return activeNudges.containsKey(nudgeId)
+    fun setActivityResumed(resumed: Boolean) {
+        activityResumed = resumed
     }
 
-    fun markNotificationActive(nudgeId: String) {
-        activeNudges[nudgeId] = System.currentTimeMillis()
-    }
-
-    fun markNotificationInactive(nudgeId: String) {
-        activeNudges.remove(nudgeId)
+    fun isNotificationActive(context: Context, nudgeId: String): Boolean {
+        val manager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return false
+        return manager.activeNotifications.any {
+            it.tag == "nudgr_$nudgeId" && it.id == NOTIFICATION_ID &&
+                it.notification.extras.getBoolean("nudgr_native", false)
+        }
     }
 
     fun isAppInForeground(context: Context): Boolean {
-        val activityManager = context.getSystemService(Context.ACTIVITY_SERVICE) as? ActivityManager ?: return false
-        val appProcesses = activityManager.runningAppProcesses ?: return false
-        val packageName = context.packageName
-        for (appProcess in appProcesses) {
-            if (appProcess.importance == ActivityManager.RunningAppProcessInfo.IMPORTANCE_FOREGROUND &&
-                appProcess.processName == packageName) {
-                return true
-            }
-        }
-        return false
+        // A receiver/service can temporarily raise process importance without a visible activity.
+        return activityResumed
     }
 
     fun createNotificationChannel(context: Context) {
@@ -79,18 +71,38 @@ object NudgrNotificationHelper {
         }
     }
 
+    @Synchronized
     fun showIncomingNotification(
         context: Context,
         nudgeId: String,
         triggerId: String,
         senderName: String,
         message: String
-    ) {
+    ): Boolean {
         createNotificationChannel(context)
 
-        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
+        val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return false
         val tag = "nudgr_$nudgeId"
         val soundUri = Uri.parse("android.resource://" + context.packageName + "/raw/ringtone")
+
+        val previous = NudgrIncomingState.get(context, nudgeId)
+        val sameTrigger = previous != null && (triggerId.isEmpty() ||
+            previous.optString("triggerId").isEmpty() || previous.optString("triggerId") == triggerId)
+        if (sameTrigger && previous!!.optString("state") != "ringing") {
+            Log.d(TAG, "[NATIVE_NOTIFICATION_SUPPRESSED] nudgeId=$nudgeId triggerId=$triggerId state=${previous.optString("state")}")
+            return true
+        }
+        if (sameTrigger && (isNotificationActive(context, nudgeId) ||
+            android.os.SystemClock.elapsedRealtime() - (recentPosts[nudgeId] ?: Long.MIN_VALUE / 2) < 1_000L)) {
+            Log.d(TAG, "[NATIVE_NOTIFICATION_DEDUPLICATED] nudgeId=$nudgeId triggerId=$triggerId")
+            return true
+        }
+        if (!NotificationManagerCompat.from(context).areNotificationsEnabled() ||
+            (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
+                notificationManager.getNotificationChannel(CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE)) {
+            Log.w(TAG, "[NATIVE_NOTIFICATION_BLOCKED] nudgeId=$nudgeId reason=PERMISSION_OR_CHANNEL")
+            return false
+        }
 
         // 1. PendingIntent for Answer (opens MainActivity in answered mode)
         val answerIntent = Intent(context, MainActivity::class.java).apply {
@@ -181,21 +193,29 @@ object NudgrNotificationHelper {
             .setSound(soundUri)
             .setVibrate(longArrayOf(0, 800, 200, 800))
             .setContentIntent(contentPendingIntent)
-            .setFullScreenIntent(contentPendingIntent, true)
+            .setTimeoutAfter(NudgrIncomingState.RINGING_TIMEOUT_MS)
             .setDeleteIntent(deletePendingIntent)
             .addAction(R.mipmap.ic_launcher, "Answer", answerPendingIntent)
             .addAction(R.mipmap.ic_launcher, "Decline", declinePendingIntent)
 
-        notificationManager.notify(tag, NOTIFICATION_ID, builder.build())
-        markNotificationActive(nudgeId)
-        Log.d(TAG, "[NATIVE_NOTIFICATION_POSTED] tag=$tag nudgeId=$nudgeId triggerId=$triggerId")
+        val fullScreenAllowed = Build.VERSION.SDK_INT < Build.VERSION_CODES.UPSIDE_DOWN_CAKE ||
+            notificationManager.canUseFullScreenIntent()
+        if (fullScreenAllowed) builder.setFullScreenIntent(contentPendingIntent, true)
+        builder.addExtras(android.os.Bundle().apply { putBoolean("nudgr_native", true) })
+        val notification = builder.build().apply { flags = flags or Notification.FLAG_INSISTENT }
+        if (!sameTrigger) NudgrIncomingState.received(context, nudgeId, triggerId, senderName)
+        notificationManager.notify(tag, NOTIFICATION_ID, notification)
+        recentPosts[nudgeId] = android.os.SystemClock.elapsedRealtime()
+        Log.d(TAG, "[NATIVE_NOTIFICATION_POSTED] tag=$tag nudgeId=$nudgeId triggerId=$triggerId fullScreenAllowed=$fullScreenAllowed")
+        return true
     }
 
+    @Synchronized
     fun cancelNotification(context: Context, nudgeId: String) {
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return
         val tag = "nudgr_$nudgeId"
         notificationManager.cancel(tag, NOTIFICATION_ID)
-        markNotificationInactive(nudgeId)
+        recentPosts.remove(nudgeId)
         Log.d(TAG, "[NATIVE_NOTIFICATION_CANCELLED] tag=$tag")
     }
 }

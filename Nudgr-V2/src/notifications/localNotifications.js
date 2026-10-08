@@ -1,7 +1,8 @@
 import * as Notifications from 'expo-notifications';
-import { Platform } from 'react-native';
+import { AppState, Platform } from 'react-native';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { dismissNativeNotification } from './nativeNotificationBridge';
+import { dismissNativeNotification, isNativeNotificationActive, showNativeIncomingNotification } from './nativeNotificationBridge';
+import { getIncomingState, INCOMING_STATES } from './incomingState';
 
 export const NUDGR_ALERTS_CHANNEL_ID = 'nudgr_alerts';
 // Android channel sound settings are immutable after first creation. The v2 id
@@ -247,10 +248,20 @@ export async function showGeofenceEnterNotification({ regionId, enteredAt = new 
  * @param {object} params - { nudgeId, senderName, message }
  * @returns {Promise<string|null>} Notification identifier
  */
-export async function showIncomingNudgeNotification({ nudgeId, senderName, message, replaceNativeNotification = false }) {
+export async function showIncomingNudgeNotification({ nudgeId, triggerId = '', senderName, message, replaceNativeNotification = false }) {
   if (!nudgeId) {
     console.warn('[NOTIFICATION_DEBUG] showIncomingNudgeNotification missing nudgeId');
     return null;
+  }
+
+  const incoming = await getIncomingState(nudgeId);
+  if (incoming && incoming.state !== INCOMING_STATES.RINGING) return null;
+  if (Platform.OS === 'android' && typeof showNativeIncomingNotification === 'function' && AppState?.currentState !== 'active') {
+    const handled = await showNativeIncomingNotification({ nudgeId, triggerId, senderName: senderName || 'Someone', message: message || 'Incoming Nudgr' });
+    if (handled !== null) return handled ? `nudgr_${nudgeId}` : null;
+  }
+  if (typeof isNativeNotificationActive === 'function' && await isNativeNotificationActive(nudgeId)) {
+    return `nudgr_${nudgeId}`;
   }
 
   const name = senderName || 'Someone';

@@ -11,6 +11,16 @@ import com.facebook.react.defaults.DefaultReactActivityDelegate
 import expo.modules.ReactActivityDelegateWrapper
 
 class MainActivity : ReactActivity() {
+  override fun onResume() {
+    super.onResume()
+    NudgrNotificationHelper.setActivityResumed(true)
+  }
+
+  override fun onPause() {
+    NudgrNotificationHelper.setActivityResumed(false)
+    super.onPause()
+  }
+
   override fun onCreate(savedInstanceState: Bundle?) {
     // Set the theme to AppTheme BEFORE onCreate to support
     // coloring the background, status bar, and navigation bar.
@@ -43,8 +53,12 @@ class MainActivity : ReactActivity() {
 
     android.util.Log.d("MainActivity", "[NUDGR_INTENT] action=$action nudgeId=$nudgeId triggerId=$triggerId startAnswered=$startAnswered")
 
-    NudgrNotificationHelper.cancelNotification(this, nudgeId)
-    NudgrNativeBridge.setInitialAction(action, nudgeId, triggerId, startAnswered)
+    if (startAnswered) {
+      NudgrIncomingState.set(this, nudgeId, "answered")
+      NudgrNotificationHelper.cancelNotification(this, nudgeId)
+    }
+    // OPEN/full-screen keeps native ringing until IncomingNudge's audio is ready.
+    NudgrNativeBridge.setInitialAction(this, action, nudgeId, triggerId, startAnswered)
     NudgrNativeBridge.sendActionToJs(action, nudgeId, triggerId, startAnswered)
   }
 

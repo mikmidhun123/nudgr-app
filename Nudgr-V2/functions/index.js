@@ -1,6 +1,8 @@
 const functions = require('firebase-functions/v1');
-const admin = require('firebase-admin');
-admin.initializeApp();
+const { initializeApp } = require('firebase-admin/app');
+const { getFirestore, FieldValue } = require('firebase-admin/firestore');
+const { getMessaging } = require('firebase-admin/messaging');
+initializeApp();
 
 /**
  * Cloud Function: delivers a Nudgr to the recipient via Firebase Cloud
@@ -24,12 +26,12 @@ exports.sendNudgeOnTrigger = functions.firestore
     // onCreate can be delivered more than once with the original CREATED
     // snapshot. Claim the live event atomically so concurrent invocations
     // cannot send the same trigger twice.
-    const claimed = await admin.firestore().runTransaction(async (transaction) => {
+    const claimed = await getFirestore().runTransaction(async (transaction) => {
       const current = await transaction.get(snap.ref);
       if (!current.exists || current.data().status !== 'CREATED') return false;
       transaction.update(snap.ref, {
         status: 'FCM_SENDING',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       });
       return true;
     });
@@ -38,7 +40,7 @@ exports.sendNudgeOnTrigger = functions.firestore
       return null;
     }
     try {
-      const nudgeSnap = await admin.firestore().collection('nudges').doc(nudgeId).get();
+      const nudgeSnap = await getFirestore().collection('nudges').doc(nudgeId).get();
       if (!nudgeSnap.exists) {
         const error = new Error('Nudgr document is missing');
         error.code = 'NUDGR_MISSING';
@@ -51,8 +53,7 @@ exports.sendNudgeOnTrigger = functions.firestore
         error.code = 'RECIPIENT_MISSING';
         throw error;
       }
-      const userSnap = await admin
-        .firestore()
+      const userSnap = await getFirestore()
         .collection('users')
         .doc(recipientUid)
         .get();
@@ -67,7 +68,7 @@ exports.sendNudgeOnTrigger = functions.firestore
         await snap.ref.update({
           status: 'FCM_FAILED',
           error: 'RECIPIENT_TOKEN_MISSING',
-          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+          updatedAt: FieldValue.serverTimestamp(),
         });
         return null;
       }
@@ -122,7 +123,7 @@ exports.sendNudgeOnTrigger = functions.firestore
       };
 
       functions.logger.info(`[BACKEND_SEND_STARTED] nudgeId=${nudgeId} triggerEventId=${context.params.triggerEventId} recipientUid=${recipientUid} tokenCount=${tokens.length}`);
-      const sendResult = await admin.messaging().sendEachForMulticast(payload);
+      const sendResult = await getMessaging().sendEachForMulticast(payload);
       const accepted = sendResult.successCount > 0;
       functions.logger.info(`[${accepted ? 'FCM_SEND_SUCCESS' : 'FCM_SEND_FAILED'}] nudgeId=${nudgeId} success=${sendResult.successCount}/${tokens.length} failures=${sendResult.failureCount}`);
 
@@ -131,11 +132,11 @@ exports.sendNudgeOnTrigger = functions.firestore
       await snap.ref.update({
         status: accepted ? 'FCM_SENT' : 'FCM_FAILED',
         ...(accepted
-          ? { fcmSentAt: admin.firestore.FieldValue.serverTimestamp() }
+          ? { fcmSentAt: FieldValue.serverTimestamp() }
           : { error: 'FCM_ALL_TOKENS_FAILED' }),
         fcmSuccessCount: sendResult.successCount,
         fcmFailureCount: sendResult.failureCount,
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       });
 
       // Clean up invalid/expired tokens
@@ -154,9 +155,9 @@ exports.sendNudgeOnTrigger = functions.firestore
       // Remove stale tokens from Firestore
       if (tokensToRemove.length > 0) {
         const updates = {};
-        tokensToRemove.forEach(t => { updates[`fcmTokens.${t}`] = admin.firestore.FieldValue.delete(); });
+        tokensToRemove.forEach(t => { updates[`fcmTokens.${t}`] = FieldValue.delete(); });
         try {
-          await admin.firestore().collection('users').doc(recipientUid).update(updates);
+          await getFirestore().collection('users').doc(recipientUid).update(updates);
           functions.logger.info(`[FCM_TOKEN_CLEANUP] recipientUid=${recipientUid} removed=${tokensToRemove.length} stale tokens`);
         } catch (cleanupError) {
           functions.logger.warn(`[FCM_TOKEN_CLEANUP_FAILED] nudgeId=${nudgeId} error=${cleanupError.code || 'unknown'}`);
@@ -167,7 +168,7 @@ exports.sendNudgeOnTrigger = functions.firestore
       await snap.ref.update({ 
         status: 'FCM_FAILED', 
         error: err.code || 'FCM_SEND_FAILED',
-        updatedAt: admin.firestore.FieldValue.serverTimestamp() 
+        updatedAt: FieldValue.serverTimestamp()
       });
     }
 
@@ -186,10 +187,10 @@ exports.updateNudgeOnTrigger = functions.firestore
     
     if (!triggerData) return null;
 
-    const nudgeRef = admin.firestore().collection('nudges').doc(nudgeId);
+    const nudgeRef = getFirestore().collection('nudges').doc(nudgeId);
     
     // Transactionally update the Nudgr status to triggered
-    await admin.firestore().runTransaction(async (transaction) => {
+    await getFirestore().runTransaction(async (transaction) => {
       const nudgeDoc = await transaction.get(nudgeRef);
       if (!nudgeDoc.exists) return;
 
@@ -201,8 +202,8 @@ exports.updateNudgeOnTrigger = functions.firestore
 
       transaction.update(nudgeRef, {
         status: 'triggered',
-        triggeredAt: admin.firestore.FieldValue.serverTimestamp(),
-        updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        triggeredAt: FieldValue.serverTimestamp(),
+        updatedAt: FieldValue.serverTimestamp(),
       });
     });
 

@@ -1,25 +1,44 @@
 package com.nudgr
 
 import android.util.Log
+import android.content.Context
 import com.facebook.react.bridge.Arguments
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.modules.core.DeviceEventManagerModule
+import org.json.JSONObject
 
 object NudgrNativeBridge {
     private const val TAG = "NudgrNativeBridge"
     var reactContext: ReactApplicationContext? = null
 
     // Holds pending action if app was launched from cold start via Answer or notification tap
-    var pendingInitialAction: Map<String, Any?>? = null
-
-    fun setInitialAction(action: String, nudgeId: String, triggerId: String, startAnswered: Boolean) {
-        pendingInitialAction = mapOf(
+    fun setInitialAction(context: Context, action: String, nudgeId: String, triggerId: String, startAnswered: Boolean) {
+        val initial = mapOf(
             "action" to action,
             "nudgeId" to nudgeId,
             "triggerId" to triggerId,
             "startAnswered" to startAnswered
         )
-        Log.d(TAG, "Recorded initial action: $pendingInitialAction")
+        context.getSharedPreferences("nudgr_incoming", Context.MODE_PRIVATE).edit()
+            .putString("pending_action", JSONObject(initial).toString()).commit()
+        Log.d(TAG, "Recorded initial action: action=$action nudgeId=$nudgeId triggerId=$triggerId")
+    }
+
+    fun getInitialAction(context: Context): Map<String, Any?>? {
+        val stored = context.getSharedPreferences("nudgr_incoming", Context.MODE_PRIVATE)
+            .getString("pending_action", null) ?: return null
+        val value = JSONObject(stored)
+        return mapOf(
+            "action" to value.optString("action"),
+            "nudgeId" to value.optString("nudgeId"),
+            "triggerId" to value.optString("triggerId"),
+            "startAnswered" to value.optBoolean("startAnswered")
+        )
+    }
+
+    fun clearInitialAction(context: Context) {
+        context.getSharedPreferences("nudgr_incoming", Context.MODE_PRIVATE).edit()
+            .remove("pending_action").commit()
     }
 
     fun sendActionToJs(action: String, nudgeId: String, triggerId: String, startAnswered: Boolean) {

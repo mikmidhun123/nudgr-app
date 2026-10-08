@@ -10,9 +10,10 @@ import {
   ScrollView,
   Platform,
   StatusBar,
+  AppState,
 } from 'react-native';
 import { getNudge, markCompleted } from '../db/nudges';
-import { INCOMING_STATES, setIncomingState, clearIncomingState } from '../notifications/incomingState';
+import { INCOMING_STATES, getIncomingState, setIncomingState, clearIncomingState } from '../notifications/incomingState';
 import { startRingtone, stopRingtone } from '../notifications/ringtone';
 import { dismissIncomingNudgeNotification } from '../notifications/localNotifications';
 import { playNudgeMessage, stopNudgeMessage } from '../voice/playback';
@@ -56,6 +57,7 @@ export default function IncomingNudge({ nudgeId, startAnswered = false, onDismis
   useEffect(() => {
     if (!nudgeId) return;
     let active = true;
+    let appStateSub;
 
     const initialize = async () => {
       try {
@@ -72,23 +74,37 @@ export default function IncomingNudge({ nudgeId, startAnswered = false, onDismis
         setLoading(false);
 
         if (startAnswered) {
+          stopAllRinging();
           setState(INCOMING_STATES.ANSWERED);
           stateRef.current = INCOMING_STATES.ANSWERED;
           await setIncomingState(nudgeId, INCOMING_STATES.ANSWERED, nudgeData.senderName || 'Someone');
         } else {
           await setIncomingState(nudgeId, INCOMING_STATES.RINGING, nudgeData.senderName || 'Someone');
-
-          if (!ringtoneStartedRef.current) {
-            ringtoneStartedRef.current = true;
-            await startRingtone();
+          const ringing = await getIncomingState(nudgeId);
+          if (!active || !mountedRef.current || stateRef.current !== INCOMING_STATES.RINGING) return;
+          if (ringing && ringing.state !== INCOMING_STATES.RINGING) {
+            cleanup(INCOMING_STATES.MISSED);
+            return;
           }
-          Vibration.vibrate([0, 800, 200, 800], true);
+
+          const ringInForeground = async () => {
+            if (AppState.currentState !== 'active' || !active || !mountedRef.current ||
+                stateRef.current !== INCOMING_STATES.RINGING || ringtoneStartedRef.current) return;
+            ringtoneStartedRef.current = true;
+            const started = await startRingtone();
+            if (!active || !mountedRef.current || stateRef.current !== INCOMING_STATES.RINGING) return;
+            // Keep native ringing until foreground audio is actually playing.
+            if (started) await dismissIncomingNudgeNotification(nudgeId);
+            Vibration.vibrate([0, 800, 200, 800], true);
+          };
+          appStateSub = AppState.addEventListener('change', () => { ringInForeground(); });
+          await ringInForeground();
 
           timeoutRef.current = setTimeout(() => {
             if (mountedRef.current && stateRef.current === INCOMING_STATES.RINGING) {
               handleTimeout();
             }
-          }, RINGING_TIMEOUT_MS);
+          }, Math.max(0, RINGING_TIMEOUT_MS - (Date.now() - (ringing?.timestamp || Date.now()))));
         }
       } catch (e) {
         if (__DEV__) console.warn('[IncomingNudge] init error:', e.message);
@@ -98,6 +114,7 @@ export default function IncomingNudge({ nudgeId, startAnswered = false, onDismis
     initialize();
     return () => {
       active = false;
+      appStateSub?.remove();
     };
   }, [nudgeId, startAnswered]);
 
@@ -162,13 +179,14 @@ export default function IncomingNudge({ nudgeId, startAnswered = false, onDismis
     stopNudgeMessage();
     setState(finalState);
     stateRef.current = finalState;
+    setIncomingState(nudgeId, finalState, nudge?.senderName || '');
     clearIncomingState();
     if (finalState === INCOMING_STATES.ANSWERED) {
       if (onAnswer) onAnswer(nudgeId);
     } else {
       if (onDismiss) onDismiss();
     }
-  }, [nudgeId, onAnswer, onDismiss, stopAllRinging]);
+  }, [nudgeId, nudge, onAnswer, onDismiss, stopAllRinging]);
 
   const handleAnswer = useCallback(() => {
     if (stateRef.current !== INCOMING_STATES.RINGING) return;
