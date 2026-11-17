@@ -1,9 +1,22 @@
-import { getAuth } from '../firebase';
+import { getAuth, isQaBuild } from '../firebase';
 
 // Deployed Cloudflare Worker endpoint for Nudgr Voice API
 const CLOUDFLARE_WORKER_ENDPOINT =
-  process.env.EXPO_PUBLIC_R2_BACKEND_URL ||
+  (isQaBuild ? 'http://127.0.0.1:5008' : process.env.EXPO_PUBLIC_R2_BACKEND_URL) ||
   'https://nudgr-voice-api.mikmidhun123.workers.dev';
+
+export async function getDirectVoiceSource(nudgeId, value) {
+  const url = new URL(value), base = new URL(CLOUDFLARE_WORKER_ENDPOINT);
+  if (url.origin !== base.origin || !url.pathname.startsWith('/media/') || url.username || url.password || !nudgeId) {
+    throw new Error('This voice link is unavailable.');
+  }
+  const user = getAuth().currentUser;
+  if (!user) throw new Error('Sign in to play this voice note.');
+  const token = await user.getIdToken();
+  if (getAuth().currentUser?.uid !== user.uid) throw new Error('The signed-in account changed.');
+  url.searchParams.set('nudgeId', nudgeId);
+  return { downloadUrl: url.toString(), headers: { Authorization: `Bearer ${token}` } };
+}
 
 /**
  * Requests an authenticated upload endpoint from the Cloudflare Worker.
@@ -43,9 +56,9 @@ export async function getVoiceUploadUrl(nudgeId, meta = {}) {
       data = JSON.parse(rawText);
     } catch (_) {
       if (!response.ok) {
-        throw new Error(`Voice server error (${response.status}: ${response.statusText || 'Service unavailable'})`);
+        throw new Error(`Voice server error (${response.status}: ${response.statusText || 'Service unavailable'})`, { cause: _ });
       }
-      throw new Error(`Voice server returned unexpected format (${response.status})`);
+      throw new Error(`Voice server returned unexpected format (${response.status})`, { cause: _ });
     }
 
     if (!response.ok || data.error) {
@@ -84,7 +97,6 @@ export async function uploadVoiceNoteToR2(uploadUrl, localUri, mimeType = 'audio
   const idToken = user ? await user.getIdToken() : null;
 
   try {
-    // Read local file as binary Blob
     const fileResponse = await fetch(localUri);
     const blob = await fileResponse.blob();
 
@@ -96,7 +108,6 @@ export async function uploadVoiceNoteToR2(uploadUrl, localUri, mimeType = 'audio
       headers['Authorization'] = `Bearer ${idToken}`;
     }
 
-    // Upload binary stream directly to Cloudflare Worker -> R2
     const uploadResponse = await fetch(uploadUrl, {
       method: 'PUT',
       headers,
@@ -126,7 +137,7 @@ export async function uploadVoiceNoteToR2(uploadUrl, localUri, mimeType = 'audio
  *
  * @param {string} nudgeId - The Nudgr document ID
  * @param {string} storageKey - The R2 storage object key
- * @returns {Promise<{ downloadUrl: string }>}
+ * @returns {Promise<{ downloadUrl: string, headers: object }>}
  */
 export async function getVoiceDownloadUrl(nudgeId, storageKey) {
   const user = getAuth().currentUser;
@@ -156,9 +167,9 @@ export async function getVoiceDownloadUrl(nudgeId, storageKey) {
       data = JSON.parse(rawText);
     } catch (_) {
       if (!response.ok) {
-        throw new Error(`Voice server error (${response.status}: ${response.statusText || 'Service unavailable'})`);
+        throw new Error(`Voice server error (${response.status}: ${response.statusText || 'Service unavailable'})`, { cause: _ });
       }
-      throw new Error(`Voice server returned unexpected format (${response.status})`);
+      throw new Error(`Voice server returned unexpected format (${response.status})`, { cause: _ });
     }
 
     if (!response.ok || data.error) {
@@ -170,9 +181,60 @@ export async function getVoiceDownloadUrl(nudgeId, storageKey) {
 
     return {
       downloadUrl: data.downloadUrl,
+      headers: { Authorization: `Bearer ${idToken}` },
     };
   } catch (err) {
     if (__DEV__) console.warn('[r2:getVoiceDownloadUrl]', err.message);
+    throw err;
+  }
+}
+
+/**
+ * Deletes an uploaded voice note object from Cloudflare R2 via the Worker gateway.
+ * Used when a Nudgr is deleted or when creation fails after uploading audio.
+ *
+ * @param {string} storageKey - The R2 storage object key (voice/{uid}/...)
+ * @param {string|null} [nudgeId=null] - Optional associated Nudgr document ID
+ * @returns {Promise<boolean>}
+ */
+export async function deleteVoiceNote(storageKey, nudgeId = null) {
+  if (!storageKey || typeof storageKey !== 'string') {
+    return false;
+  }
+
+  const user = getAuth().currentUser;
+  if (!user) {
+    throw new Error('You must be signed in to delete a voice note.');
+  }
+
+  const idToken = await user.getIdToken();
+  const endpoint = `${CLOUDFLARE_WORKER_ENDPOINT}/deleteVoice`;
+
+  try {
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        Authorization: `Bearer ${idToken}`,
+      },
+      body: JSON.stringify({
+        storageKey,
+        ...(nudgeId ? { nudgeId } : {}),
+      }),
+    });
+
+    if (!response.ok) {
+      let errorDetail = `HTTP ${response.status}`;
+      try {
+        const errJson = await response.json();
+        errorDetail = errJson.message || errJson.error || errorDetail;
+      } catch (_) {}
+      throw new Error(`Failed to delete voice note from R2 (${errorDetail})`);
+    }
+
+    return true;
+  } catch (err) {
+    if (__DEV__) console.warn('[r2:deleteVoiceNote]', err.message);
     throw err;
   }
 }

@@ -1,4 +1,5 @@
 import * as Speech from 'expo-speech';
+let speechGeneration = 0;
 
 /**
  * 4 Distinct Local Android Text-to-Speech Voice Styles.
@@ -97,7 +98,8 @@ export function formatUtteranceForStyle(rawText, styleKey = 'normal') {
  * @param {string} styleKey One of 'gentle' | 'normal' | 'energetic' | 'urgent' | 'none'.
  * @param {object} [extraOptions] Extra expo-speech options.
  */
-export function speakNudge(text, styleKey = 'normal', extraOptions = {}) {
+export async function speakNudge(text, styleKey = 'normal', extraOptions = {}) {
+  const ownGeneration = ++speechGeneration;
   if (!text || !text.trim()) {
     if (extraOptions.onDone) extraOptions.onDone();
     return;
@@ -111,7 +113,8 @@ export function speakNudge(text, styleKey = 'normal', extraOptions = {}) {
   const utterance = formatUtteranceForStyle(text, styleKey);
 
   try {
-    Speech.stop();
+    await Speech.stop();
+    if (ownGeneration !== speechGeneration) return;
     Speech.speak(utterance, {
       pitch: style.pitch,
       rate: style.rate,
@@ -131,9 +134,10 @@ export function speakNudge(text, styleKey = 'normal', extraOptions = {}) {
 }
 
 /** Stops any currently playing speech. */
-export function stopSpeech() {
+export async function stopSpeech() {
+  speechGeneration += 1;
   try {
-    Speech.stop();
+    await Speech.stop();
   } catch (e) {
     if (__DEV__) {
       console.warn('[TTS:stop]', e.message);
@@ -163,7 +167,7 @@ export function previewVoice(styleKey = 'normal', customText = null) {
   }
 
   // Distinct character demonstration phrases
-  let sampleText = '';
+  let sampleText;
   switch (styleKey) {
     case 'gentle':
       sampleText = 'Take your time. I will be right here whenever you arrive.';

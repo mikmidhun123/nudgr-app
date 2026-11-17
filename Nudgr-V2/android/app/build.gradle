@@ -1,4 +1,5 @@
 apply plugin: "com.android.application"
+apply plugin: "com.google.firebase.crashlytics"
 apply plugin: "org.jetbrains.kotlin.android"
 apply plugin: "com.facebook.react"
 
@@ -11,7 +12,7 @@ def projectRoot = rootDir.getAbsoluteFile().getParentFile().getAbsolutePath()
 react {
     entryFile = file(["node", "-e", "require('expo/scripts/resolveAppEntry')", projectRoot, "android", "absolute"].execute(null, rootDir).text.trim())
     reactNativeDir = new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
-    hermesCommand = new File(["node", "--print", "require.resolve('react-native/package.json')"].execute(null, rootDir).text.trim()).getParentFile().getAbsolutePath() + "/sdks/hermesc/%OS-BIN%/hermesc"
+    hermesCommand = new File(["node", "--print", "require.resolve('hermes-compiler/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim()).getParentFile().getAbsolutePath() + "/hermesc/%OS-BIN%/hermesc"
     codegenDir = new File(["node", "--print", "require.resolve('@react-native/codegen/package.json', { paths: [require.resolve('react-native/package.json')] })"].execute(null, rootDir).text.trim()).getParentFile().getAbsoluteFile()
 
     // Use Expo CLI to bundle the app, this ensures the Metro config
@@ -65,7 +66,7 @@ react {
 /**
  * Set this to true to Run Proguard on Release builds to minify the Java bytecode.
  */
-def enableProguardInReleaseBuilds = (findProperty('android.enableProguardInReleaseBuilds') ?: false).toBoolean()
+def enableProguardInReleaseBuilds = (findProperty('android.enableMinifyInReleaseBuilds') ?: false).toBoolean()
 
 /**
  * The preferred build flavor of JavaScriptCore (JSC)
@@ -91,8 +92,13 @@ android {
         applicationId 'com.nudgr'
         minSdkVersion rootProject.ext.minSdkVersion
         targetSdkVersion rootProject.ext.targetSdkVersion
-        versionCode 1
-        versionName "1.0.0"
+        versionCode 2
+        versionName "1.0.1"
+        buildConfigField "String", "REACT_NATIVE_RELEASE_LEVEL", "\"stable\""
+        buildConfigField "boolean", "NUDGR_QA_BUILD", "false"
+        buildConfigField "boolean", "NUDGR_CI_AUTH", "false"
+        buildConfigField "boolean", "NUDGR_CRASH_REPORTING", "false"
+        manifestPlaceholders.put("nudgrCrashReporting", "false")
     }
     signingConfigs {
         debug {
@@ -107,14 +113,29 @@ android {
             signingConfig signingConfigs.debug
         }
         release {
-            // Caution! In production, you need to generate your own keystore file.
-            // see https://reactnative.dev/docs/signed-apk-android.
-            signingConfig signingConfigs.debug
+            buildConfigField "boolean", "NUDGR_CRASH_REPORTING", "${findProperty('nudgrCrashReporting') ?: 'false'}"
+            manifestPlaceholders.put("nudgrCrashReporting", "${findProperty('nudgrCrashReporting') ?: 'false'}")
+            firebaseCrashlytics {
+                mappingFileUploadEnabled project.findProperty('nudgrUploadCrashSymbols') == 'true'
+                nativeSymbolUploadEnabled false
+            }
+            // Production release stays unsigned until an existing signing key is configured.
             shrinkResources (findProperty('android.enableShrinkResourcesInReleaseBuilds')?.toBoolean() ?: false)
             minifyEnabled enableProguardInReleaseBuilds
-            proguardFiles getDefaultProguardFile("proguard-android.txt"), "proguard-rules.pro"
+            proguardFiles getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro"
             crunchPngs (findProperty('android.enablePngCrunchInReleaseBuilds')?.toBoolean() ?: true)
         }
+    }
+    // Bundled, optimized QA APK for device testing, signed only with the debug key.
+    buildTypes.create("qa") {
+        initWith buildTypes.release
+        debuggable true
+        signingConfig signingConfigs.debug
+        matchingFallbacks = ["debug", "release"]
+        buildConfigField "boolean", "NUDGR_QA_BUILD", "true"
+        buildConfigField "boolean", "NUDGR_CRASH_REPORTING", "false"
+        manifestPlaceholders.put("nudgrCrashReporting", "false")
+        buildConfigField "boolean", "NUDGR_CI_AUTH", "${findProperty('nudgrCiAuth') ?: 'false'}"
     }
     packagingOptions {
         jniLibs {
@@ -147,10 +168,14 @@ android {
 }
 
 dependencies {
+    testImplementation 'junit:junit:4.13.2'
     // The version of react-native is set by the React Native Gradle Plugin
     implementation("com.facebook.react:react-android")
-    implementation platform('com.google.firebase:firebase-bom:33.12.0')
+    implementation platform('com.google.firebase:firebase-bom:34.15.0')
     implementation 'com.google.firebase:firebase-messaging'
+    implementation 'com.google.firebase:firebase-auth'
+    implementation 'com.google.firebase:firebase-firestore'
+    implementation 'com.google.firebase:firebase-crashlytics'
 
     def isGifEnabled = (findProperty('expo.gif.enabled') ?: "") == "true";
     def isWebpEnabled = (findProperty('expo.webp.enabled') ?: "") == "true";
@@ -158,15 +183,15 @@ dependencies {
 
     if (isGifEnabled) {
         // For animated gif support
-        implementation("com.facebook.fresco:animated-gif:${reactAndroidLibs.versions.fresco.get()}")
+        implementation("com.facebook.fresco:animated-gif:${expoLibs.versions.fresco.get()}")
     }
 
     if (isWebpEnabled) {
         // For webp support
-        implementation("com.facebook.fresco:webpsupport:${reactAndroidLibs.versions.fresco.get()}")
+        implementation("com.facebook.fresco:webpsupport:${expoLibs.versions.fresco.get()}")
         if (isWebpAnimatedEnabled) {
             // Animated webp support
-            implementation("com.facebook.fresco:animated-webp:${reactAndroidLibs.versions.fresco.get()}")
+            implementation("com.facebook.fresco:animated-webp:${expoLibs.versions.fresco.get()}")
         }
     }
 

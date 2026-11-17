@@ -1,27 +1,26 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   Animated,
   Easing,
   View,
   Text,
   TouchableOpacity,
-  TouchableWithoutFeedback,
   StyleSheet,
   Dimensions,
   BackHandler,
-  StatusBar,
 } from 'react-native';
-import { THEME } from './theme';
 
 const DRAWER_WIDTH = Math.min(Dimensions.get('window').width * 0.78, 320);
-const ANIMATION_DURATION = 250;
+const ANIMATION_DURATION = 260;
+
+// ─── Hamburger / Close Button ──────────────────────────────────────────────
 
 export function HamburgerButton({ isOpen, onPress }) {
-  const topRotate = useRef(new Animated.Value(0)).current;
-  const midOpacity = useRef(new Animated.Value(1)).current;
-  const botRotate = useRef(new Animated.Value(0)).current;
-  const topTranslateY = useRef(new Animated.Value(0)).current;
-  const botTranslateY = useRef(new Animated.Value(0)).current;
+  const topRotate = useRef(new Animated.Value(isOpen ? 1 : 0)).current;
+  const midOpacity = useRef(new Animated.Value(isOpen ? 0 : 1)).current;
+  const botRotate = useRef(new Animated.Value(isOpen ? 1 : 0)).current;
+  const topTranslateY = useRef(new Animated.Value(isOpen ? 7 : 0)).current;
+  const botTranslateY = useRef(new Animated.Value(isOpen ? -7 : 0)).current;
 
   useEffect(() => {
     const toValue = isOpen ? 1 : 0;
@@ -88,7 +87,7 @@ export function HamburgerButton({ isOpen, onPress }) {
       onPress={onPress}
       activeOpacity={0.7}
       style={hamburgerStyles.btn}
-      hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+      hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
     >
       <Animated.View style={[hamburgerStyles.bar, topStyle]} />
       <Animated.View style={[hamburgerStyles.bar, { opacity: midOpacity }]} />
@@ -104,26 +103,35 @@ const hamburgerStyles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     gap: 5,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.10)',
+    borderColor: 'rgba(255, 255, 255, 0.95)',
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.10,
+    shadowRadius: 10,
+    elevation: 3,
   },
   bar: {
-    width: 20,
-    height: 2,
-    borderRadius: 2,
-    backgroundColor: THEME.colors.textPrimary,
+    width: 18,
+    height: 2.2,
+    borderRadius: 1.5,
+    backgroundColor: '#0F172A',
   },
 });
 
-// ─── Side Drawer ────────────────────────────────────────────────────────────
+// ─── Side Drawer ─────────────────────────────────────────────────────────────
 
 export default function SideMenu({ isOpen, onClose, onNavigate }) {
-  const translateX = useRef(new Animated.Value(-DRAWER_WIDTH)).current;
-  const backdropOpacity = useRef(new Animated.Value(0)).current;
+  const [rendered, setRendered] = useState(isOpen);
+  const translateX = useRef(new Animated.Value(isOpen ? 0 : -DRAWER_WIDTH)).current;
+  const backdropOpacity = useRef(new Animated.Value(isOpen ? 0.35 : 0)).current;
 
   useEffect(() => {
+    if (isOpen) {
+      setRendered(true);
+    }
     Animated.parallel([
       Animated.timing(translateX, {
         toValue: isOpen ? 0 : -DRAWER_WIDTH,
@@ -132,12 +140,16 @@ export default function SideMenu({ isOpen, onClose, onNavigate }) {
         useNativeDriver: true,
       }),
       Animated.timing(backdropOpacity, {
-        toValue: isOpen ? 0.7 : 0,
+        toValue: isOpen ? 0.35 : 0,
         duration: ANIMATION_DURATION,
         easing: Easing.bezier(0.4, 0, 0.2, 1),
         useNativeDriver: true,
       }),
-    ]).start();
+    ]).start(({ finished }) => {
+      if (finished && !isOpen) {
+        setRendered(false);
+      }
+    });
   }, [isOpen]);
 
   // Android back button closes the drawer first when open
@@ -152,82 +164,133 @@ export default function SideMenu({ isOpen, onClose, onNavigate }) {
 
   const navigate = (screen) => {
     onClose();
+    if (screen === 'home') return;
     setTimeout(() => onNavigate(screen), 50); // let close animation start first
   };
 
+  if (!isOpen && !rendered) {
+    return null;
+  }
+
   return (
-    <>
-      {/* Backdrop */}
-      {isOpen && (
-        <TouchableWithoutFeedback onPress={onClose}>
-          <Animated.View
-            style={[StyleSheet.absoluteFillObject, styles.backdrop, { opacity: backdropOpacity }]}
-            pointerEvents={isOpen ? 'auto' : 'none'}
-          />
-        </TouchableWithoutFeedback>
-      )}
+    <View
+      style={[StyleSheet.absoluteFill, styles.rootOverlay]}
+      pointerEvents={isOpen ? 'auto' : 'none'}
+    >
+      {/* Visual Dim Backdrop */}
+      <Animated.View
+        style={[StyleSheet.absoluteFillObject, styles.backdrop, { opacity: backdropOpacity }]}
+        pointerEvents="none"
+      />
 
-      {/* Drawer */}
-      <Animated.View style={[styles.drawer, { transform: [{ translateX }] }]}>
+      {/* Full-Screen Backdrop Touch Target (tapping anywhere outside drawer closes it) */}
+      <TouchableOpacity
+        style={[StyleSheet.absoluteFillObject, styles.backdropTouch]}
+        activeOpacity={1}
+        onPress={onClose}
+      />
+
+      {/* Top-Right Close Cross (matches HomeScreen header position so tapping ✕ always closes) */}
+      <View style={styles.topRightCloseContainer} pointerEvents="box-none">
+        <HamburgerButton isOpen={true} onPress={onClose} />
+      </View>
+
+      {/* Drawer Panel */}
+      <Animated.View
+        style={[styles.drawer, { transform: [{ translateX }] }]}
+        pointerEvents={isOpen ? 'auto' : 'none'}
+      >
+        {/* Drawer Header */}
         <View style={styles.drawerHeader}>
-          <View style={styles.drawerLogo}>
-            <Text style={styles.drawerLogoText}>N</Text>
-          </View>
-          <View>
-            <Text style={styles.drawerTitle}>Nudgr</Text>
-            <Text style={styles.drawerSubtitle}>Smart Location Reminders</Text>
-          </View>
+          <TouchableOpacity
+            style={styles.drawerBrandTouch}
+            onPress={onClose}
+            activeOpacity={0.75}
+          >
+            <View style={styles.drawerLogoBox}>
+              <Text style={styles.drawerLogoText}>N</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.drawerAppName}>
+                Nudgr<Text style={styles.drawerDot}>.</Text>
+              </Text>
+              <Text style={styles.drawerTagline}>Smart location reminders</Text>
+            </View>
+          </TouchableOpacity>
         </View>
 
         <View style={styles.divider} />
 
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={() => navigate('profile')}
-          activeOpacity={0.7}
-        >
-          <View style={styles.iconContainer}>
-            <Text style={styles.menuItemIcon}>👤</Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.menuItemText}>Profile & Account</Text>
-            <Text style={styles.menuItemSubtext}>Settings, diagnostics & logout</Text>
-          </View>
-          <Text style={styles.chevron}>›</Text>
-        </TouchableOpacity>
+        {/* Navigation Items */}
+        <View style={styles.navSection}>
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigate('myconnection')}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.menuIconBox, styles.menuIconTeal]}>
+              <Text style={styles.menuIconGlyph}>👥</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuItemTitle}>My Connections</Text>
+              <Text style={styles.menuItemSub}>Pair with peers & share code</Text>
+            </View>
+            <Text style={styles.menuChevron}>›</Text>
+          </TouchableOpacity>
 
-        <TouchableOpacity
-          style={styles.menuItem}
-          onPress={() => navigate('myconnection')}
-          activeOpacity={0.7}
-        >
-          <View style={styles.iconContainer}>
-            <Text style={styles.menuItemIcon}>🔗</Text>
-          </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.menuItemText}>My Connections</Text>
-            <Text style={styles.menuItemSubtext}>Pair with peers & share code</Text>
-          </View>
-          <Text style={styles.chevron}>›</Text>
-        </TouchableOpacity>
-
-        <View style={styles.divider} />
-
-        <View style={styles.drawerFooter}>
-          <View style={styles.footerBadge}>
-            <Text style={styles.footerBadgeText}>NUDGR V2</Text>
-          </View>
-          <Text style={styles.drawerFooterText}>iPhone Glass Edition</Text>
+          <TouchableOpacity
+            style={styles.menuItem}
+            onPress={() => navigate('profile')}
+            activeOpacity={0.75}
+          >
+            <View style={[styles.menuIconBox, styles.menuIconPurple]}>
+              <Text style={styles.menuIconGlyph}>👤</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.menuItemTitle}>Profile & Account</Text>
+              <Text style={styles.menuItemSub}>Settings, diagnostics & logout</Text>
+            </View>
+            <Text style={styles.menuChevron}>›</Text>
+          </TouchableOpacity>
         </View>
+
+        {/* Tappable Empty Space Inside Left Drawer (tapping blank area returns to Home) */}
+        <TouchableOpacity
+          style={styles.drawerEmptyFill}
+          activeOpacity={1}
+          onPress={onClose}
+        >
+          <View style={styles.drawerFooter}>
+            <View style={styles.footerBadge}>
+              <Text style={styles.footerBadgeText}>NUDGR V2</Text>
+            </View>
+            <Text style={styles.footerSubtext}>Smart Arrival Reminders</Text>
+          </View>
+        </TouchableOpacity>
       </Animated.View>
-    </>
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  rootOverlay: {
+    zIndex: 1000,
+    elevation: 30,
+  },
   backdrop: {
-    backgroundColor: '#000000',
+    backgroundColor: '#0F172A',
     zIndex: 100,
+  },
+  backdropTouch: {
+    zIndex: 101,
+    backgroundColor: 'transparent',
+  },
+  topRightCloseContainer: {
+    position: 'absolute',
+    top: 12,
+    right: 24,
+    zIndex: 103,
+    elevation: 32,
   },
   drawer: {
     position: 'absolute',
@@ -235,126 +298,146 @@ const styles = StyleSheet.create({
     left: 0,
     bottom: 0,
     width: DRAWER_WIDTH,
-    backgroundColor: '#0c101d',
-    zIndex: 101,
+    backgroundColor: '#FFFFFF',
+    zIndex: 102,
     borderRightWidth: 1,
-    borderRightColor: THEME.colors.glassBorder,
-    shadowColor: '#000',
+    borderRightColor: '#E2E8F0',
+    shadowColor: '#64748B',
     shadowOffset: { width: 8, height: 0 },
-    shadowOpacity: 0.5,
+    shadowOpacity: 0.15,
     shadowRadius: 24,
-    elevation: 20,
-    paddingTop: (StatusBar.currentHeight || 0) + 24,
+    elevation: 31,
+    paddingTop: 20,
+  },
+  drawerBrandTouch: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
   },
   drawerHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     paddingHorizontal: 22,
-    paddingBottom: 22,
+    paddingBottom: 20,
     gap: 14,
   },
-  drawerLogo: {
-    width: 44,
-    height: 44,
-    borderRadius: 14,
-    backgroundColor: THEME.colors.accentPrimary,
+  drawerLogoBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: '#6366F1',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: THEME.colors.accentPrimary,
+    shadowColor: '#6366F1',
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
+    shadowOpacity: 0.35,
     shadowRadius: 10,
-    elevation: 6,
+    elevation: 5,
   },
   drawerLogoText: {
     color: '#ffffff',
-    fontSize: 22,
+    fontSize: 24,
     fontWeight: '900',
     letterSpacing: -1,
   },
-  drawerTitle: {
+  drawerAppName: {
     fontSize: 22,
     fontWeight: '800',
-    color: THEME.colors.textPrimary,
+    color: '#0F172A',
     letterSpacing: -0.5,
   },
-  drawerSubtitle: {
+  drawerDot: {
+    color: '#6366F1',
+    fontWeight: '900',
+  },
+  drawerTagline: {
     fontSize: 12,
-    color: THEME.colors.textSecondary,
-    fontWeight: '500',
+    color: '#64748B',
+    fontWeight: '400',
+    marginTop: 2,
   },
   divider: {
     height: 1,
-    backgroundColor: THEME.colors.glassBorderSubtle,
-    marginHorizontal: 18,
-    marginVertical: 10,
+    backgroundColor: '#E2E8F0',
+    marginHorizontal: 20,
+    marginBottom: 16,
+  },
+  navSection: {
+    paddingHorizontal: 14,
+    gap: 8,
   },
   menuItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 14,
-    borderRadius: 18,
-    marginHorizontal: 12,
-    marginVertical: 4,
-    gap: 14,
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    paddingHorizontal: 14,
+    paddingVertical: 13,
+    borderRadius: 20,
+    gap: 12,
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: '#E2E8F0',
+    marginBottom: 2,
   },
-  iconContainer: {
-    width: 36,
-    height: 36,
-    borderRadius: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+  menuIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 14,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.10)',
   },
-  menuItemIcon: {
+  menuIconPurple: {
+    backgroundColor: '#EEF2FF',
+  },
+  menuIconTeal: {
+    backgroundColor: '#ECFDF5',
+  },
+  menuIconGlyph: {
     fontSize: 18,
   },
-  menuItemText: {
+  menuItemTitle: {
     fontSize: 15,
     fontWeight: '700',
-    color: THEME.colors.textPrimary,
+    color: '#0F172A',
     letterSpacing: -0.2,
+    marginBottom: 2,
   },
-  menuItemSubtext: {
-    fontSize: 11,
-    color: THEME.colors.textSecondary,
-    marginTop: 2,
+  menuItemSub: {
+    fontSize: 12,
+    color: '#64748B',
   },
-  chevron: {
+  menuChevron: {
     fontSize: 20,
-    color: THEME.colors.textTertiary,
+    color: '#94A3B8',
     fontWeight: '300',
   },
+  drawerEmptyFill: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    paddingBottom: 32,
+    paddingHorizontal: 22,
+  },
   drawerFooter: {
-    position: 'absolute',
-    bottom: 32,
-    left: 22,
     gap: 6,
   },
   footerBadge: {
     alignSelf: 'flex-start',
-    backgroundColor: 'rgba(139, 124, 255, 0.12)',
+    backgroundColor: '#EEF2FF',
     paddingHorizontal: 10,
     paddingVertical: 4,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: 'rgba(139, 124, 255, 0.25)',
+    borderColor: '#C7D2FE',
   },
   footerBadgeText: {
     fontSize: 10,
     fontWeight: '800',
-    color: THEME.colors.accentPrimary,
+    color: '#6366F1',
     letterSpacing: 1.5,
   },
-  drawerFooterText: {
+  footerSubtext: {
     fontSize: 12,
-    color: THEME.colors.textTertiary,
-    fontWeight: '500',
+    color: '#94A3B8',
+    fontWeight: '400',
   },
 });

@@ -1,0 +1,102 @@
+name: Android hardening checks
+on:
+  pull_request:
+  push:
+    branches: [main, master, 'codex/**']
+  workflow_dispatch:
+permissions:
+  contents: read
+defaults:
+  run:
+    working-directory: Nudgr-V2
+jobs:
+  runtime-and-rules:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: |
+            Nudgr-V2/package-lock.json
+            Nudgr-V2/functions/package-lock.json
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - run: npm ci
+      - run: npm ci --prefix functions
+      - run: npm run check
+      - name: Integration checks against loopback Firestore
+        run: |
+          curl --fail --location --silent --show-error --output /tmp/firestore.jar https://storage.googleapis.com/firebase-preview-drop/emulator/cloud-firestore-emulator-v1.19.8.jar
+          echo '9d43599ed6151199e8d604dc87fac51218e49e5f3a48519b1ae560bbe5e3382d  /tmp/firestore.jar' | sha256sum --check
+          java -jar /tmp/firestore.jar --host 127.0.0.1 --port 8087 --project_id demo-nudgr-audit --rules firestore.rules > /tmp/firestore.log 2>&1 &
+          emulator_pid=$!
+          trap 'kill "$emulator_pid" || true' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --silent http://127.0.0.1:8087/ > /dev/null; then break; fi
+            sleep 1
+          done
+          FIRESTORE_EMULATOR_HOST=127.0.0.1:8087 npm run test:integration
+  android-build-and-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+      - uses: actions/setup-node@249970729cb0ef3589644e2896645e5dc5ba9c38 # v6
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: Nudgr-V2/package-lock.json
+      - uses: actions/setup-java@b6effb05e454b25005698d916606bdc6ffcbf961 # v5
+        with:
+          distribution: temurin
+          java-version: '21'
+      - uses: android-actions/setup-android@9fc6c4e9069bf8d3d10b2204b1fb8f6ef7065407 # v3
+      - uses: gradle/actions/setup-gradle@4c125117fe7c5aed11272ec4213f602f012f89f2 # v5
+      - run: npm ci
+      - run: node tools/write-ci-firebase.cjs
+      - name: Create a disposable QA signing key
+        run: |
+          if [ ! -f android/app/debug.keystore ]; then
+            keytool -genkeypair -keystore android/app/debug.keystore -storepass android -keypass android -alias androiddebugkey -keyalg RSA -keysize 2048 -validity 10000 -dname 'CN=Android Debug,O=Android,C=US'
+          fi
+      - run: sdkmanager 'platforms;android-36' 'build-tools;36.0.0' 'ndk;27.1.12297006'
+      - name: Build QA and unsigned release fixtures
+        run: |
+          chmod +x android/gradlew
+          cd android
+          ./gradlew :app:assembleQa :app:testQaUnitTest :app:assembleRelease :app:bundleRelease :app:lintRelease -PnudgrCiAuth=true --max-workers=2 --console=plain
+          ./gradlew --stop
+      - name: Verify packaged 64-bit ELF and native ZIP alignment
+        run: python3 tools/verify-android-artifact.py android/app/build/outputs/apk/release/app-release-unsigned.apk android/app/build/outputs/bundle/release/app-release.aab
+      - name: Enable emulator KVM
+        working-directory: .
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@4c44018e59b437e86cdfc41da381398f93ed8808 # v2
+        with:
+          api-level: 36
+          target: google_apis
+          arch: x86_64
+          profile: pixel_2
+          ram-size: 2048M
+          emulator-options: -no-window -no-snapshot -noaudio -no-boot-anim -gpu swiftshader_indirect
+          script: cd Nudgr-V2 && node tools/android-smoke.cjs --apk=android/app/build/outputs/apk/qa/app-qa.apk
+      - uses: actions/upload-artifact@b7c566a772e6b6bfb58ed0dc250532a479d7789f # v6
+        if: always()
+        with:
+          name: ci-fixtures-not-for-distribution
+          if-no-files-found: warn
+          path: |
+            Nudgr-V2/android/app/build/outputs/apk/qa/*.apk
+            Nudgr-V2/android/app/build/outputs/apk/release/*.apk
+            Nudgr-V2/android/app/build/outputs/bundle/release/*.aab
+            Nudgr-V2/android/app/build/reports/lint-results-release.html
+            Nudgr-V2/android/app/build/test-results/testQaUnitTest/
+            Nudgr-V2/android-smoke-evidence/

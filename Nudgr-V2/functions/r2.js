@@ -1,4 +1,5 @@
-const admin = require('firebase-admin');
+const { getAuth } = require('firebase-admin/auth');
+const { getFirestore } = require('firebase-admin/firestore');
 
 /**
  * Cloudflare R2 Presigned URL Generator for Firebase Functions
@@ -49,7 +50,7 @@ async function verifyAuthToken(req) {
     return null;
   }
   try {
-    return await admin.auth().verifyIdToken(match[1]);
+    return await getAuth().verifyIdToken(match[1]);
   } catch (e) {
     return null;
   }
@@ -124,24 +125,22 @@ async function handleGetVoiceDownloadUrl(req, res) {
   }
 
   const { nudgeId, storageKey } = req.body || {};
-  if (!storageKey) {
-    return res.status(400).json({ error: 'MISSING_KEY', message: 'storageKey is required.' });
+  if (typeof nudgeId !== 'string' || !nudgeId || nudgeId.includes('/') ||
+      typeof storageKey !== 'string' || !storageKey) {
+    return res.status(400).json({ error: 'MISSING_KEY', message: 'nudgeId and storageKey are required.' });
   }
 
   // Authorize: check if user is sender or recipient of the Nudgr
-  if (nudgeId) {
-    try {
-      const nudgeSnap = await admin.firestore().collection('nudges').doc(nudgeId).get();
-      if (nudgeSnap.exists) {
-        const nudge = nudgeSnap.data();
-        const isAuthorized = nudge.senderUid === authUser.uid || nudge.recipientUid === authUser.uid;
-        if (!isAuthorized) {
-          return res.status(403).json({ error: 'FORBIDDEN', message: 'You are not authorized to access this voice note.' });
-        }
-      }
-    } catch (e) {
-      console.warn('[r2:authCheck]', e.message);
+  try {
+    const nudgeSnap = await getFirestore().collection('nudges').doc(nudgeId).get();
+    const nudge = nudgeSnap.exists ? nudgeSnap.data() : null;
+    if (!nudge || (nudge.senderUid !== authUser.uid && nudge.recipientUid !== authUser.uid) ||
+        nudge.voiceNote?.storageKey !== storageKey || !storageKey.startsWith(`voice/${nudge.senderUid}/`)) {
+      return res.status(403).json({ error: 'FORBIDDEN', message: 'You are not authorized to access this voice note.' });
     }
+  } catch (e) {
+    console.warn('[r2:authCheck]', e.code || 'unknown');
+    return res.status(503).json({ error: 'AUTHORIZATION_UNAVAILABLE' });
   }
 
   const bucketName = process.env.R2_BUCKET_NAME || 'nudgr-voice';

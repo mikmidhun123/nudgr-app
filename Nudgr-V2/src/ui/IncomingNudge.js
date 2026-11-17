@@ -13,25 +13,29 @@ import {
   AppState,
 } from 'react-native';
 import { getNudge, markCompleted } from '../db/nudges';
+import { isNativeNotificationActive } from '../notifications/nativeNotificationBridge';
 import { INCOMING_STATES, getIncomingState, setIncomingState, clearIncomingState } from '../notifications/incomingState';
 import { startRingtone, stopRingtone } from '../notifications/ringtone';
 import { dismissIncomingNudgeNotification } from '../notifications/localNotifications';
 import { playNudgeMessage, stopNudgeMessage } from '../voice/playback';
 import { VOICE_STYLES } from '../voice/tts';
+import RadarPulse from './RadarPulse';
+import WaveformBars from './WaveformBars';
+import AmbientBackground from './AmbientBackground';
 import { THEME } from './theme';
 
 const RINGING_TIMEOUT_MS = 30000;
 const ANDROID_STATUS_BAR_HEIGHT = Platform.OS === 'android' ? (StatusBar.currentHeight || 24) : 0;
 
 /**
- * Incoming Nudgr full-screen experience with iPhone-inspired Glassmorphism.
+ * Incoming Nudgr full-screen experience — premium dark call-screen design.
  */
 export default function IncomingNudge({ nudgeId, startAnswered = false, onDismiss, onAnswer }) {
   const [nudge, setNudge] = useState(null);
   const [loading, setLoading] = useState(true);
   const [state, setState] = useState(startAnswered ? INCOMING_STATES.ANSWERED : INCOMING_STATES.RINGING);
   const [playbackStatus, setPlaybackStatus] = useState('idle');
-  const [playbackType, setPlaybackType] = useState(null);
+  const [, setPlaybackType] = useState(null);
 
   const stateRef = useRef(state);
   const timeoutRef = useRef(null);
@@ -90,6 +94,9 @@ export default function IncomingNudge({ nudgeId, startAnswered = false, onDismis
           const ringInForeground = async () => {
             if (AppState.currentState !== 'active' || !active || !mountedRef.current ||
                 stateRef.current !== INCOMING_STATES.RINGING || ringtoneStartedRef.current) return;
+            const nativeRinging = await isNativeNotificationActive(nudgeId);
+            if (!active || !mountedRef.current || stateRef.current !== INCOMING_STATES.RINGING) return;
+            if (nativeRinging) return;
             ringtoneStartedRef.current = true;
             const started = await startRingtone();
             if (!active || !mountedRef.current || stateRef.current !== INCOMING_STATES.RINGING) return;
@@ -97,7 +104,17 @@ export default function IncomingNudge({ nudgeId, startAnswered = false, onDismis
             if (started) await dismissIncomingNudgeNotification(nudgeId);
             Vibration.vibrate([0, 800, 200, 800], true);
           };
-          appStateSub = AppState.addEventListener('change', () => { ringInForeground(); });
+          appStateSub = AppState.addEventListener('change', async next => {
+            if (next !== 'active') {
+              ringtoneStartedRef.current = false;
+              stopRingtone(); Vibration.cancel();
+              return;
+            }
+            const latest = await getIncomingState(nudgeId);
+            if (!active || !mountedRef.current) return;
+            if (latest && latest.state !== INCOMING_STATES.RINGING) { cleanup(INCOMING_STATES.MISSED); return; }
+            ringInForeground();
+          });
           await ringInForeground();
 
           timeoutRef.current = setTimeout(() => {
@@ -155,7 +172,7 @@ export default function IncomingNudge({ nudgeId, startAnswered = false, onDismis
       onDone: () => {
         if (mountedRef.current) {
           setPlaybackStatus('completed');
-          markCompleted(nudgeData.id).catch(() => {});
+          markCompleted(nudgeData.id, nudgeData.lastTriggerEventId).catch(() => {});
         }
       },
       onError: (err) => {
@@ -219,7 +236,7 @@ export default function IncomingNudge({ nudgeId, startAnswered = false, onDismis
   const handleFinish = useCallback(async () => {
     await stopNudgeMessage();
     if (nudge?.id) {
-      await markCompleted(nudge.id).catch(() => {});
+      await markCompleted(nudge.id, nudge.lastTriggerEventId).catch(() => {});
     }
     clearIncomingState();
     if (onDismiss) onDismiss();
@@ -232,19 +249,19 @@ export default function IncomingNudge({ nudgeId, startAnswered = false, onDismis
     return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
   };
 
+  // ── Loading State ────────────────────────────────────────────────────────
   if (loading) {
     return (
       <View style={styles.fullscreen}>
-        <StatusBar backgroundColor="#070A12" barStyle="light-content" />
+        <AmbientBackground />
+        <StatusBar backgroundColor="#F6F7FC" barStyle="dark-content" />
         <ActivityIndicator color={THEME.colors.accentPrimary} size="large" />
         <Text style={styles.loadingText}>Incoming Nudgr…</Text>
       </View>
     );
   }
 
-  // -------------------------------------------------------------
-  // 1. INCOMING RINGING STATE — iPhone Glass Call Screen
-  // -------------------------------------------------------------
+  // ── RINGING STATE ────────────────────────────────────────────────────────
   if (state === INCOMING_STATES.RINGING) {
     const senderName = nudge?.senderName || 'Someone';
     const initials = getSenderInitials(senderName);
@@ -253,67 +270,75 @@ export default function IncomingNudge({ nudgeId, startAnswered = false, onDismis
 
     return (
       <View style={styles.fullscreen}>
-        <StatusBar backgroundColor="#070A12" barStyle="light-content" />
+        <AmbientBackground />
+        <StatusBar backgroundColor="#F6F7FC" barStyle="dark-content" />
 
-        {/* Ambient Glow Orbs */}
-        <View style={styles.glowTop} pointerEvents="none" />
-        <View style={styles.glowBottom} pointerEvents="none" />
-
-        {/* Top Header Badge */}
-        <View style={[styles.topSection, { paddingTop: ANDROID_STATUS_BAR_HEIGHT + 24 }]}>
-          <View style={styles.appPill}>
-            <View style={styles.appPillDot} />
-            <Text style={styles.badge}>NUDGR CALL</Text>
+        {/* ── Top Badge ── */}
+        <View style={[styles.topSection, { paddingTop: ANDROID_STATUS_BAR_HEIGHT + 28 }]}>
+          <View style={styles.incomingPill}>
+            <View style={styles.incomingPillDot} />
+            <Text style={styles.incomingPillText}>NUDGR CALL</Text>
           </View>
-          <Text style={styles.incomingLabel}>Location Arrival Alert</Text>
+          <Text style={styles.incomingTypeLabel}>Location Arrival Alert</Text>
         </View>
 
-        {/* Center: Large Avatar & Sender */}
+        {/* ── Avatar Section ── */}
         <View style={styles.avatarSection}>
-          <View style={styles.avatarRing}>
-            <View style={styles.avatarCircle}>
-              <Text style={styles.avatarInitials}>{initials}</Text>
-            </View>
+          <View style={{ marginBottom: 20 }}>
+            <RadarPulse active={true} size={156} color={THEME.colors.accentPrimary}>
+              {/* Outer glow ring */}
+              <View style={[styles.avatarOuterRing, { marginBottom: 0 }]}>
+                {/* Inner ring */}
+                <View style={styles.avatarInnerRing}>
+                  <View style={styles.avatarCircle}>
+                    <Text style={styles.avatarInitials}>{initials}</Text>
+                  </View>
+                </View>
+              </View>
+            </RadarPulse>
           </View>
+
           <Text style={styles.senderName}>{senderName}</Text>
-          <View style={styles.locationTag}>
-            <Text style={styles.locationText}>📍 {locationLabel}</Text>
+
+          <View style={styles.locationPill}>
+            <Text style={styles.locationPillIcon}>◎</Text>
+            <Text style={styles.locationPillText}>{locationLabel}</Text>
           </View>
         </View>
 
-        {/* Translucent Glass Message Card */}
-        <View style={styles.glassMessageCard}>
-          <Text style={styles.messagePreviewLabel}>MESSAGE</Text>
-          <Text style={styles.messagePreviewText} numberOfLines={3}>
+        {/* ── Message Preview Card ── */}
+        <View style={styles.messageCard}>
+          <Text style={styles.messageCardLabel}>MESSAGE</Text>
+          <Text style={styles.messageCardText} numberOfLines={3}>
             "{nudgeMessage}"
           </Text>
         </View>
 
-        {/* Bottom Glass Call Actions */}
+        {/* ── Call Actions ── */}
         <View style={styles.actionsSection}>
-          <View style={styles.actions}>
-            {/* Decline Action */}
-            <View style={styles.btnWrapper}>
+          <View style={styles.actionsRow}>
+            {/* Decline */}
+            <View style={styles.actionButtonWrapper}>
               <TouchableOpacity
-                style={styles.declineBtn}
+                style={styles.declineButton}
                 onPress={handleDecline}
                 activeOpacity={0.8}
               >
                 <Text style={styles.declineIcon}>✕</Text>
               </TouchableOpacity>
-              <Text style={styles.btnLabel}>Decline</Text>
+              <Text style={styles.actionLabel}>Decline</Text>
             </View>
 
-            {/* Answer Action */}
-            <View style={styles.btnWrapper}>
+            {/* Answer */}
+            <View style={styles.actionButtonWrapper}>
               <TouchableOpacity
-                style={styles.answerBtn}
+                style={styles.answerButton}
                 onPress={handleAnswer}
                 activeOpacity={0.8}
               >
                 <Text style={styles.answerIcon}>✓</Text>
               </TouchableOpacity>
-              <Text style={styles.btnLabel}>Answer</Text>
+              <Text style={styles.actionLabel}>Answer</Text>
             </View>
           </View>
         </View>
@@ -321,9 +346,7 @@ export default function IncomingNudge({ nudgeId, startAnswered = false, onDismis
     );
   }
 
-  // -------------------------------------------------------------
-  // 2. ACTIVE FULL-SCREEN PLAYBACK (Answered Mode)
-  // -------------------------------------------------------------
+  // ── ANSWERED / ACTIVE PLAYBACK STATE ────────────────────────────────────
   if (state === INCOMING_STATES.ANSWERED) {
     const voiceLabel =
       nudge?.voiceNote?.enabled || nudge?.voiceUrl || nudge?.audioUrl
@@ -332,65 +355,100 @@ export default function IncomingNudge({ nudgeId, startAnswered = false, onDismis
 
     return (
       <View style={styles.fullscreen}>
-        <StatusBar backgroundColor="#070A12" barStyle="light-content" />
-        <View style={[styles.activeCard, { paddingTop: ANDROID_STATUS_BAR_HEIGHT + 20 }]}>
-          <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-            <View style={styles.activeHeader}>
-              <View style={styles.appPill}>
-                <View style={[styles.appPillDot, { backgroundColor: THEME.colors.success }]} />
-                <Text style={[styles.badge, { color: THEME.colors.success }]}>NUDGR CONNECTED</Text>
+        <AmbientBackground />
+        <StatusBar backgroundColor="#F6F7FC" barStyle="dark-content" />
+
+        <View style={[styles.answeredContainer, { paddingTop: ANDROID_STATUS_BAR_HEIGHT + 20 }]}>
+          <ScrollView contentContainerStyle={styles.answeredScrollContent} showsVerticalScrollIndicator={false}>
+
+            {/* ── Header Badge ── */}
+            <View style={styles.answeredHeaderBadge}>
+              <View style={[styles.incomingPillDot, { backgroundColor: THEME.colors.mint }]} />
+              <Text style={[styles.incomingPillText, { color: THEME.colors.mint }]}>CONNECTED</Text>
+            </View>
+            <Text style={styles.answeredSubtitle}>Active Arrival Message</Text>
+
+            {/* ── Sender ── */}
+            <View style={styles.answeredSenderRow}>
+              <View style={styles.answeredSenderAvatar}>
+                <Text style={styles.answeredSenderInitial}>
+                  {getSenderInitials(nudge?.senderName || 'S')}
+                </Text>
               </View>
-              <Text style={styles.activeSubtitle}>Active Arrival Message</Text>
+              <View>
+                <Text style={styles.answeredFromLabel}>From</Text>
+                <Text style={styles.answeredSenderName}>{nudge?.senderName || 'Someone'}</Text>
+              </View>
             </View>
 
-            <Text style={styles.activeSender}>From {nudge?.senderName || 'Someone'}</Text>
-
-            <View style={styles.locationBadge}>
-              <Text style={styles.locationBadgeText}>
-                📍 {nudge?.triggerLabel || 'Location'}: {nudge?.triggerLatitude?.toFixed(4)}, {nudge?.triggerLongitude?.toFixed(4)} ({nudge?.radiusKm?.toFixed(1)} km)
+            {/* ── Location Badge ── */}
+            <View style={styles.answeredLocationBadge}>
+              <Text style={styles.answeredLocationText}>
+                {nudge?.triggerLabel || 'Location'} · {nudge?.radiusKm?.toFixed(1)} km radius
               </Text>
             </View>
 
-            {/* Message Body */}
-            <View style={styles.messageBox}>
-              <Text style={styles.messageLabel}>MESSAGE</Text>
-              <Text style={styles.messageText}>{nudge?.message || 'Arrived at your location!'}</Text>
+            {/* ── Message Box ── */}
+            <View style={styles.answeredMessageBox}>
+              <Text style={styles.answeredMessageLabel}>MESSAGE</Text>
+              <Text style={styles.answeredMessageText}>{nudge?.message || 'Arrived at your location!'}</Text>
             </View>
 
-            {/* Playback Status Bar */}
+            {/* ── Playback Box ── */}
             <View style={styles.playbackBox}>
               <View style={styles.playbackHeader}>
-                <Text style={styles.voiceTypeTag}>🎙️ {voiceLabel}</Text>
-                {playbackStatus === 'playing' && (
-                  <View style={styles.statusLive}>
-                    <ActivityIndicator size="small" color={THEME.colors.accentSecondary} style={{ marginRight: 6 }} />
-                    <Text style={styles.statusLiveText}>Playing audio…</Text>
-                  </View>
-                )}
-                {playbackStatus === 'completed' && (
-                  <Text style={styles.statusCompletedText}>✓ Delivered & Played</Text>
-                )}
-                {playbackStatus === 'idle' && (
-                  <Text style={styles.statusIdleText}>Ready</Text>
-                )}
+                <View style={styles.playbackVoiceTag}>
+                  <Text style={styles.playbackVoiceIcon}>◉</Text>
+                  <Text style={styles.playbackVoiceLabel}>{voiceLabel}</Text>
+                </View>
+                <View style={styles.playbackStatusBadge}>
+                  {playbackStatus === 'playing' && (
+                    <>
+                      <ActivityIndicator size="small" color={THEME.colors.accentPrimary} style={{ marginRight: 6 }} />
+                      <Text style={styles.playbackStatusText}>Playing…</Text>
+                    </>
+                  )}
+                  {playbackStatus === 'completed' && (
+                    <Text style={[styles.playbackStatusText, { color: THEME.colors.mint }]}>
+                      Delivered
+                    </Text>
+                  )}
+                  {playbackStatus === 'idle' && (
+                    <Text style={[styles.playbackStatusText, { color: THEME.colors.textTertiary }]}>
+                      Ready
+                    </Text>
+                  )}
+                </View>
               </View>
+
+              {playbackStatus === 'playing' && (
+                <WaveformBars
+                  active={true}
+                  barCount={22}
+                  color={THEME.colors.accentPrimary}
+                  maxHeight={24}
+                  style={{ marginBottom: 14 }}
+                />
+              )}
 
               <View style={styles.playbackControls}>
                 {playbackStatus === 'playing' ? (
-                  <TouchableOpacity style={styles.controlBtn} onPress={handleStopAudio} activeOpacity={0.8}>
-                    <Text style={styles.controlBtnText}>⏹ Stop</Text>
+                  <TouchableOpacity style={styles.playbackBtn} onPress={handleStopAudio} activeOpacity={0.8}>
+                    <Text style={styles.playbackBtnIcon}>■</Text>
+                    <Text style={styles.playbackBtnText}>Stop</Text>
                   </TouchableOpacity>
                 ) : (
-                  <TouchableOpacity style={styles.controlBtn} onPress={handleReplay} activeOpacity={0.8}>
-                    <Text style={styles.controlBtnText}>🔊 Replay Message</Text>
+                  <TouchableOpacity style={styles.playbackBtn} onPress={handleReplay} activeOpacity={0.8}>
+                    <Text style={styles.playbackBtnIcon}>▶</Text>
+                    <Text style={styles.playbackBtnText}>Replay Message</Text>
                   </TouchableOpacity>
                 )}
               </View>
             </View>
 
-            {/* Finish Button */}
+            {/* ── Finish Button ── */}
             <TouchableOpacity style={styles.finishButton} onPress={handleFinish} activeOpacity={0.85}>
-              <Text style={styles.finishButtonText}>✓ Finish & Close</Text>
+              <Text style={styles.finishButtonText}>Finish & Close</Text>
             </TouchableOpacity>
           </ScrollView>
         </View>
@@ -408,29 +466,12 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    backgroundColor: '#070A12',
+    backgroundColor: THEME.colors.bg,
     zIndex: 9999,
     elevation: 20,
     justifyContent: 'center',
   },
-  glowTop: {
-    position: 'absolute',
-    top: -80,
-    left: -40,
-    width: 260,
-    height: 260,
-    borderRadius: 130,
-    backgroundColor: 'rgba(139, 124, 255, 0.12)',
-  },
-  glowBottom: {
-    position: 'absolute',
-    bottom: 60,
-    right: -40,
-    width: 240,
-    height: 240,
-    borderRadius: 120,
-    backgroundColor: 'rgba(90, 200, 250, 0.10)',
-  },
+
   loadingText: {
     color: THEME.colors.textSecondary,
     fontSize: 15,
@@ -438,312 +479,366 @@ const styles = StyleSheet.create({
     textAlign: 'center',
   },
 
-  // --- Top Section ---
+  // ── Top Section ───────────────────────────────────────────────────────────
   topSection: {
     alignItems: 'center',
     paddingBottom: 8,
   },
-  appPill: {
+  incomingPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
-    paddingHorizontal: 14,
+    borderColor: THEME.colors.glassBorderSubtle,
+    paddingHorizontal: 16,
     paddingVertical: 6,
     borderRadius: THEME.radius.pill,
     gap: 8,
     marginBottom: 8,
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 6,
+    elevation: 2,
   },
-  appPillDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
+  incomingPillDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
     backgroundColor: THEME.colors.accentPrimary,
   },
-  badge: {
+  incomingPillText: {
     fontSize: 12,
     fontWeight: '800',
     color: THEME.colors.accentPrimary,
     letterSpacing: 2,
   },
-  incomingLabel: {
-    fontSize: 13,
+  incomingTypeLabel: {
+    fontSize: 14,
     color: THEME.colors.textSecondary,
-    letterSpacing: 0.5,
+    letterSpacing: 0.3,
   },
 
-  // --- Avatar Section ---
+  // ── Avatar Section ────────────────────────────────────────────────────────
   avatarSection: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 12,
   },
-  avatarRing: {
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    borderWidth: 2,
-    borderColor: 'rgba(139, 124, 255, 0.35)',
+  avatarOuterRing: {
+    width: 152,
+    height: 152,
+    borderRadius: 76,
+    borderWidth: 1.5,
+    borderColor: 'rgba(99, 102, 241, 0.15)',
     alignItems: 'center',
     justifyContent: 'center',
     marginBottom: 20,
+  },
+  avatarInnerRing: {
+    width: 130,
+    height: 130,
+    borderRadius: 65,
+    borderWidth: 2,
+    borderColor: 'rgba(99, 102, 241, 0.30)',
+    alignItems: 'center',
+    justifyContent: 'center',
     shadowColor: THEME.colors.accentPrimary,
-    shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.45,
-    shadowRadius: 20,
-    elevation: 10,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.20,
+    shadowRadius: 16,
+    elevation: 4,
   },
   avatarCircle: {
-    width: 114,
-    height: 114,
-    borderRadius: 57,
-    backgroundColor: 'rgba(139, 124, 255, 0.15)',
-    borderWidth: 3,
-    borderColor: THEME.colors.accentPrimary,
+    width: 104,
+    height: 104,
+    borderRadius: 52,
+    backgroundColor: THEME.colors.accentPrimary,
     alignItems: 'center',
     justifyContent: 'center',
   },
   avatarInitials: {
-    fontSize: 42,
+    fontSize: 38,
     fontWeight: '800',
     color: '#ffffff',
-    letterSpacing: 2,
+    letterSpacing: 1,
   },
   senderName: {
-    fontSize: 34,
+    fontSize: 30,
     fontWeight: '800',
-    color: '#ffffff',
+    color: THEME.colors.textPrimary,
     textAlign: 'center',
-    marginBottom: 8,
+    marginBottom: 10,
     paddingHorizontal: 24,
-    letterSpacing: -0.5,
+    letterSpacing: -0.6,
   },
-  locationTag: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+  locationPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.10)',
+    borderColor: THEME.colors.glassBorderSubtle,
     borderRadius: THEME.radius.pill,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
+    paddingHorizontal: 14,
+    paddingVertical: 6,
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 1,
   },
-  locationText: {
+  locationPillIcon: {
+    fontSize: 12,
+    color: THEME.colors.mint,
+    fontWeight: '700',
+  },
+  locationPillText: {
     fontSize: 12,
     color: THEME.colors.textSecondary,
     fontWeight: '600',
   },
 
-  // --- Message Card ---
-  glassMessageCard: {
+  // ── Message Card ──────────────────────────────────────────────────────────
+  messageCard: {
     marginHorizontal: 24,
-    marginBottom: 24,
-    backgroundColor: THEME.colors.bgCardElevated,
-    borderRadius: 22,
-    padding: 18,
-    borderWidth: 1,
-    borderColor: THEME.colors.glassBorderHighlight,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.35,
-    shadowRadius: 16,
-    elevation: 6,
+    marginBottom: 28,
+    ...THEME.glassCardHero,
+    padding: 20,
   },
-  messagePreviewLabel: {
+  messageCardLabel: {
     fontSize: 10,
     fontWeight: '800',
-    color: THEME.colors.accentSecondary,
+    color: THEME.colors.textTertiary,
     letterSpacing: 1.5,
     marginBottom: 6,
   },
-  messagePreviewText: {
+  messageCardText: {
     fontSize: 16,
-    color: '#ffffff',
-    lineHeight: 22,
-    fontWeight: '500',
+    color: THEME.colors.textPrimary,
+    lineHeight: 23,
     fontStyle: 'italic',
   },
 
-  // --- Actions ---
+  // ── Call Actions ──────────────────────────────────────────────────────────
   actionsSection: {
     paddingBottom: 48,
     paddingHorizontal: 36,
   },
-  actions: {
+  actionsRow: {
     flexDirection: 'row',
     justifyContent: 'space-around',
     alignItems: 'center',
   },
-  btnWrapper: {
+  actionButtonWrapper: {
     alignItems: 'center',
-    gap: 8,
+    gap: 10,
   },
-  declineBtn: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: 'rgba(255, 69, 58, 0.22)',
-    borderWidth: 1.5,
-    borderColor: THEME.colors.danger,
+  declineButton: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: '#EF4444',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: THEME.colors.danger,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
-    shadowRadius: 12,
+    shadowColor: '#EF4444',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.38,
+    shadowRadius: 14,
     elevation: 8,
   },
   declineIcon: {
     fontSize: 26,
     color: '#ffffff',
-    fontWeight: '700',
+    fontWeight: '800',
   },
-  answerBtn: {
-    width: 72,
-    height: 72,
-    borderRadius: 36,
-    backgroundColor: 'rgba(48, 209, 88, 0.25)',
-    borderWidth: 1.5,
-    borderColor: THEME.colors.success,
+  answerButton: {
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    backgroundColor: '#10B981',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: THEME.colors.success,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.45,
-    shadowRadius: 12,
+    shadowColor: '#10B981',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.38,
+    shadowRadius: 14,
     elevation: 8,
   },
   answerIcon: {
-    fontSize: 26,
+    fontSize: 28,
     color: '#ffffff',
+    fontWeight: '800',
+  },
+  actionLabel: {
+    fontSize: 13,
+    color: THEME.colors.textSecondary,
     fontWeight: '700',
   },
-  btnLabel: {
-    fontSize: 13,
-    color: THEME.colors.textSecondary,
-    fontWeight: '600',
-  },
 
-  // --- Answered State Card ---
-  activeCard: {
+  // ── Answered State ────────────────────────────────────────────────────────
+  answeredContainer: {
     flex: 1,
-    backgroundColor: '#070A12',
+    backgroundColor: 'transparent',
   },
-  scrollContent: {
+  answeredScrollContent: {
     alignItems: 'center',
-    paddingHorizontal: 22,
+    paddingHorizontal: 20,
     paddingBottom: 40,
   },
-  activeHeader: {
+  answeredHeaderBadge: {
+    flexDirection: 'row',
     alignItems: 'center',
+    gap: 8,
+    backgroundColor: THEME.colors.mintBg,
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: THEME.radius.pill,
     marginBottom: 6,
   },
-  activeSubtitle: {
-    fontSize: 13,
+  answeredSubtitle: {
+    fontSize: 14,
     color: THEME.colors.textSecondary,
-    marginBottom: 10,
-    letterSpacing: 0.5,
+    marginBottom: 20,
+    letterSpacing: 0.3,
   },
-  activeSender: {
-    fontSize: 28,
-    fontWeight: '800',
-    color: '#ffffff',
-    marginBottom: 10,
-    textAlign: 'center',
-    letterSpacing: -0.3,
-  },
-  locationBadge: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderColor: THEME.colors.glassBorder,
-    borderWidth: 1,
-    borderRadius: 14,
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    marginBottom: 16,
-  },
-  locationBadgeText: {
-    fontSize: 12,
-    color: THEME.colors.accentSecondary,
-    fontWeight: '600',
-    textAlign: 'center',
-  },
-  messageBox: {
+  answeredSenderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    marginBottom: 14,
+    alignSelf: 'flex-start',
     width: '100%',
-    backgroundColor: THEME.colors.bgCard,
-    borderRadius: THEME.radius.card,
-    padding: 18,
+  },
+  answeredSenderAvatar: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: THEME.colors.lavenderBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  answeredSenderInitial: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: THEME.colors.accentPrimary,
+  },
+  answeredFromLabel: {
+    fontSize: 11,
+    color: THEME.colors.textTertiary,
+    fontWeight: '700',
+    letterSpacing: 0.3,
+    marginBottom: 1,
+  },
+  answeredSenderName: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: THEME.colors.textPrimary,
+    letterSpacing: -0.4,
+  },
+  answeredLocationBadge: {
+    alignSelf: 'flex-start',
+    backgroundColor: '#FFFFFF',
+    borderColor: THEME.colors.glassBorderSubtle,
     borderWidth: 1,
-    borderColor: THEME.colors.glassBorder,
+    borderRadius: THEME.radius.xs,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    marginBottom: 16,
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 1,
+  },
+  answeredLocationText: {
+    fontSize: 12,
+    color: THEME.colors.textSecondary,
+    fontWeight: '600',
+  },
+  answeredMessageBox: {
+    width: '100%',
+    ...THEME.glassCard,
+    padding: 18,
     marginBottom: 16,
   },
-  messageLabel: {
+  answeredMessageLabel: {
     fontSize: 10,
     fontWeight: '800',
     color: THEME.colors.textTertiary,
-    letterSpacing: 1.2,
+    letterSpacing: 1.1,
     marginBottom: 6,
   },
-  messageText: {
+  answeredMessageText: {
     fontSize: 17,
-    color: '#ffffff',
+    color: THEME.colors.textPrimary,
     lineHeight: 24,
     fontWeight: '500',
   },
+
+  // ── Playback Controls ─────────────────────────────────────────────────────
   playbackBox: {
     width: '100%',
-    backgroundColor: THEME.colors.bgCard,
-    borderRadius: THEME.radius.card,
+    ...THEME.glassCard,
     padding: 16,
-    borderWidth: 1,
-    borderColor: 'rgba(90, 200, 250, 0.25)',
-    marginBottom: 22,
+    marginBottom: 24,
   },
   playbackHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 14,
   },
-  voiceTypeTag: {
+  playbackVoiceTag: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  playbackVoiceIcon: {
+    fontSize: 12,
+    color: THEME.colors.accentPrimary,
+    fontWeight: '700',
+  },
+  playbackVoiceLabel: {
     fontSize: 13,
     fontWeight: '700',
-    color: THEME.colors.accentSecondary,
+    color: THEME.colors.textPrimary,
   },
-  statusLive: {
+  playbackStatusBadge: {
     flexDirection: 'row',
     alignItems: 'center',
   },
-  statusLiveText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: THEME.colors.accentSecondary,
-  },
-  statusCompletedText: {
+  playbackStatusText: {
     fontSize: 12,
     fontWeight: '700',
-    color: THEME.colors.success,
-  },
-  statusIdleText: {
-    fontSize: 12,
-    color: THEME.colors.textTertiary,
+    color: THEME.colors.accentPrimary,
   },
   playbackControls: {
     flexDirection: 'row',
   },
-  controlBtn: {
+  playbackBtn: {
     flex: 1,
-    backgroundColor: 'rgba(90, 200, 250, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(90, 200, 250, 0.3)',
-    borderRadius: 12,
-    paddingVertical: 11,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: THEME.colors.lavenderBg,
+    borderRadius: THEME.radius.xs,
+    paddingVertical: 12,
   },
-  controlBtnText: {
+  playbackBtnIcon: {
+    fontSize: 14,
+    color: THEME.colors.accentPrimary,
+    fontWeight: '700',
+  },
+  playbackBtnText: {
     fontSize: 14,
     fontWeight: '700',
-    color: THEME.colors.accentSecondary,
+    color: THEME.colors.accentPrimary,
   },
+
+  // ── Finish Button ─────────────────────────────────────────────────────────
   finishButton: {
     width: '100%',
     ...THEME.buttonPrimary,
@@ -751,9 +846,9 @@ const styles = StyleSheet.create({
     paddingVertical: 16,
   },
   finishButtonText: {
-    fontSize: 17,
-    fontWeight: '800',
+    fontSize: 16,
+    fontWeight: '700',
     color: '#ffffff',
-    letterSpacing: 0.3,
+    letterSpacing: 0.2,
   },
 });

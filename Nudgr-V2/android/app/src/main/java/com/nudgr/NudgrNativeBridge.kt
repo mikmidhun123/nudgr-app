@@ -19,15 +19,17 @@ object NudgrNativeBridge {
             "triggerId" to triggerId,
             "startAnswered" to startAnswered
         )
-        context.getSharedPreferences("nudgr_incoming", Context.MODE_PRIVATE).edit()
+        context.getSharedPreferences(if (BuildConfig.NUDGR_QA_BUILD) "nudgr_incoming_qa" else "nudgr_incoming", Context.MODE_PRIVATE).edit()
             .putString("pending_action", JSONObject(initial).toString()).commit()
         Log.d(TAG, "Recorded initial action: action=$action nudgeId=$nudgeId triggerId=$triggerId")
     }
 
     fun getInitialAction(context: Context): Map<String, Any?>? {
-        val stored = context.getSharedPreferences("nudgr_incoming", Context.MODE_PRIVATE)
+        val stored = context.getSharedPreferences(if (BuildConfig.NUDGR_QA_BUILD) "nudgr_incoming_qa" else "nudgr_incoming", Context.MODE_PRIVATE)
             .getString("pending_action", null) ?: return null
         val value = JSONObject(stored)
+        val incoming = NudgrIncomingState.get(context, value.optString("nudgeId")) ?: return null
+        if (incoming.optString("triggerId") != value.optString("triggerId")) return null
         return mapOf(
             "action" to value.optString("action"),
             "nudgeId" to value.optString("nudgeId"),
@@ -37,7 +39,7 @@ object NudgrNativeBridge {
     }
 
     fun clearInitialAction(context: Context) {
-        context.getSharedPreferences("nudgr_incoming", Context.MODE_PRIVATE).edit()
+        context.getSharedPreferences(if (BuildConfig.NUDGR_QA_BUILD) "nudgr_incoming_qa" else "nudgr_incoming", Context.MODE_PRIVATE).edit()
             .remove("pending_action").commit()
     }
 

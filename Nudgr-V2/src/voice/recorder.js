@@ -1,4 +1,4 @@
-import { Audio } from 'expo-av';
+import { Audio } from './audio';
 
 const MAX_RECORDING_DURATION_MS = 60000; // 60 seconds max
 
@@ -7,6 +7,8 @@ let previewSound = null;
 let recordedMetadata = null; // { uri, durationMs, sizeBytes, mimeType }
 let durationTimer = null;
 let durationCounter = 0;
+let previewGeneration = 0;
+let recordingGeneration = 0;
 
 /**
  * Checks if microphone permission has been granted.
@@ -41,8 +43,11 @@ export async function requestMicPermission() {
  * @param {function} [options.onMaxDurationReached] - Callback when 60s limit reached
  */
 export async function startRecording({ onDurationUpdate, onMaxDurationReached } = {}) {
+  const ownGeneration = ++recordingGeneration;
+  const current = () => ownGeneration === recordingGeneration;
   // Stop preview if active
   await stopPreview();
+  if (!current()) return false;
 
   const hasPerm = await hasMicPermission();
   if (!hasPerm) {
@@ -52,6 +57,8 @@ export async function startRecording({ onDurationUpdate, onMaxDurationReached } 
     }
   }
 
+  if (!current()) return false;
+
   // Cleanup any orphaned recording instance
   if (recordingInstance) {
     try {
@@ -60,8 +67,10 @@ export async function startRecording({ onDurationUpdate, onMaxDurationReached } 
     recordingInstance = null;
   }
 
+  if (!current()) return false;
   recordedMetadata = null;
   durationCounter = 0;
+  let recording;
 
   try {
     await Audio.setAudioModeAsync({
@@ -71,9 +80,12 @@ export async function startRecording({ onDurationUpdate, onMaxDurationReached } 
       playThroughEarpieceAndroid: false,
     });
 
-    const recording = new Audio.Recording();
+    if (!current()) return false;
+    recording = new Audio.Recording();
     await recording.prepareToRecordAsync(Audio.RecordingOptionsPresets.HIGH_QUALITY);
+    if (!current()) { await recording.stopAndUnloadAsync(); return false; }
     await recording.startAsync();
+    if (!current()) { await recording.stopAndUnloadAsync(); return false; }
 
     recordingInstance = recording;
 
@@ -96,6 +108,8 @@ export async function startRecording({ onDurationUpdate, onMaxDurationReached } 
 
     return true;
   } catch (err) {
+    await recording?.stopAndUnloadAsync().catch(() => {});
+    if (!current()) return false;
     clearInterval(durationTimer);
     recordingInstance = null;
     if (__DEV__) console.warn('[recorder:startRecording]', err.message);
@@ -108,17 +122,20 @@ export async function startRecording({ onDurationUpdate, onMaxDurationReached } 
  * @returns {Promise<{ uri: string, durationMs: number, sizeBytes: number, mimeType: string } | null>}
  */
 export async function stopRecording() {
+  const ownGeneration = ++recordingGeneration;
   clearInterval(durationTimer);
 
   if (!recordingInstance) {
     return recordedMetadata;
   }
 
+  const recording = recordingInstance;
+  recordingInstance = null;
   try {
-    const status = await recordingInstance.getStatusAsync();
-    await recordingInstance.stopAndUnloadAsync();
-
-    const uri = recordingInstance.getURI();
+    const status = await recording.getStatusAsync();
+    await recording.stopAndUnloadAsync();
+    if (recordingGeneration !== ownGeneration) return null;
+    const uri = recording.getURI();
     const durationMs = status.durationMillis || durationCounter * 1000 || 1000;
     
     // Approximate file size if not directly available (typical 128kbps AAC is ~16KB/sec)
@@ -134,6 +151,7 @@ export async function stopRecording() {
       playThroughEarpieceAndroid: false,
     });
 
+    if (recordingGeneration !== ownGeneration) return null;
     recordedMetadata = {
       uri,
       durationMs,
@@ -144,7 +162,7 @@ export async function stopRecording() {
     return recordedMetadata;
   } catch (err) {
     if (__DEV__) console.warn('[recorder:stopRecording]', err.message);
-    recordingInstance = null;
+    if (recordingGeneration === ownGeneration) recordingInstance = null;
     return null;
   }
 }
@@ -163,7 +181,9 @@ export async function playPreview(uri = null, onDone = null, onError = null) {
     return;
   }
 
-  await stopPreview();
+  const ownGeneration = ++previewGeneration;
+  await cleanUpPreview();
+  if (ownGeneration !== previewGeneration) return null;
 
   try {
     await Audio.setAudioModeAsync({
@@ -175,16 +195,18 @@ export async function playPreview(uri = null, onDone = null, onError = null) {
 
     const { sound } = await Audio.Sound.createAsync(
       { uri: targetUri },
-      { shouldPlay: true, isLooping: false, volume: 1.0 },
+      { shouldPlay: false, isLooping: false, volume: 1.0 },
       (status) => {
-        if (status.didJustFinish) {
+        if (ownGeneration === previewGeneration && status.didJustFinish) {
           stopPreview();
           if (onDone) onDone();
         }
       }
     );
 
+    if (ownGeneration !== previewGeneration) { await sound.unloadAsync(); return null; }
     previewSound = sound;
+    await sound.playAsync();
     return sound;
   } catch (err) {
     if (__DEV__) console.warn('[recorder:playPreview]', err.message);
@@ -197,14 +219,17 @@ export async function playPreview(uri = null, onDone = null, onError = null) {
 /**
  * Stops any playing preview.
  */
+async function cleanUpPreview() {
+  const sound = previewSound;
+  previewSound = null;
+  if (!sound) return;
+  try { await sound.stopAsync(); } catch (_) { /* Unload still releases an interrupted preview. */ }
+  await sound.unloadAsync().catch(() => {});
+}
+
 export async function stopPreview() {
-  if (previewSound) {
-    try {
-      await previewSound.stopAsync();
-      await previewSound.unloadAsync();
-    } catch (_) {}
-    previewSound = null;
-  }
+  previewGeneration += 1;
+  await cleanUpPreview();
 }
 
 /**
@@ -225,6 +250,7 @@ export function getRecordedState() {
  * Discards the current recording and frees resources.
  */
 export async function discardRecording() {
+  recordingGeneration += 1;
   clearInterval(durationTimer);
   await stopPreview();
 

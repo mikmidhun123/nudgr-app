@@ -3,8 +3,8 @@ import { StyleSheet, Text, View, TouchableOpacity } from 'react-native';
 import { THEME } from './theme';
 
 /**
- * Clean, interactive time roller/picker component in iPhone Glass style.
- * Allows choosing exact hour (1-12), minute (00-59 in steps or presets), and AM/PM.
+ * Clean, interactive time roller/picker component.
+ * Allows choosing exact hour (1-12), minute (00-59), and AM/PM.
  */
 export default function TimePickerRoller({
   hour12 = 6,
@@ -66,22 +66,24 @@ export default function TimePickerRoller({
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>SELECT TRIGGER START TIME</Text>
+      <Text style={styles.title}>SELECT TRIGGER TIME</Text>
 
-      {/* Quick Relative Test Buttons (+1 min, +2 min, +5 min) */}
+      {/* Quick Relative Buttons */}
       <View style={styles.relativeRow}>
-        <Text style={styles.relativeLabel}>Quick Presets:</Text>
-        <TouchableOpacity style={styles.relativeBtn} onPress={() => setFromNow(1)} activeOpacity={0.75}>
-          <Text style={styles.relativeBtnText}>+1 min</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.relativeBtn} onPress={() => setFromNow(2)} activeOpacity={0.75}>
-          <Text style={styles.relativeBtnText}>+2 min</Text>
-        </TouchableOpacity>
-        <TouchableOpacity style={styles.relativeBtn} onPress={() => setFromNow(5)} activeOpacity={0.75}>
-          <Text style={styles.relativeBtnText}>+5 min</Text>
-        </TouchableOpacity>
+        <Text style={styles.relativeLabel}>From now:</Text>
+        {[1, 2, 5].map((mins) => (
+          <TouchableOpacity
+            key={mins}
+            style={styles.relativeBtn}
+            onPress={() => setFromNow(mins)}
+            activeOpacity={0.75}
+          >
+            <Text style={styles.relativeBtnText}>+{mins} min</Text>
+          </TouchableOpacity>
+        ))}
       </View>
 
+      {/* Time Picker Columns */}
       <View style={styles.pickerRow}>
         {/* Hour Column */}
         <View style={styles.col}>
@@ -95,7 +97,7 @@ export default function TimePickerRoller({
 
           <View style={styles.digitBox}>
             <Text style={styles.digitText}>{hour12}</Text>
-            <Text style={styles.digitLabel}>HOUR</Text>
+            <Text style={styles.digitLabel}>HR</Text>
           </View>
 
           <TouchableOpacity
@@ -133,31 +135,24 @@ export default function TimePickerRoller({
           </TouchableOpacity>
         </View>
 
-        {/* AM / PM Column */}
+        {/* AM / PM */}
         <View style={styles.periodCol}>
-          <TouchableOpacity
-            style={[styles.periodBtn, period === 'AM' && styles.periodBtnActive]}
-            onPress={() => updateTime(hour12, minute, 'AM')}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.periodText, period === 'AM' && styles.periodTextActive]}>
-              AM
-            </Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.periodBtn, period === 'PM' && styles.periodBtnActive]}
-            onPress={() => updateTime(hour12, minute, 'PM')}
-            activeOpacity={0.8}
-          >
-            <Text style={[styles.periodText, period === 'PM' && styles.periodTextActive]}>
-              PM
-            </Text>
-          </TouchableOpacity>
+          {['AM', 'PM'].map((p) => (
+            <TouchableOpacity
+              key={p}
+              style={[styles.periodBtn, period === p && styles.periodBtnActive]}
+              onPress={() => updateTime(hour12, minute, p)}
+              activeOpacity={0.8}
+            >
+              <Text style={[styles.periodText, period === p && styles.periodTextActive]}>
+                {p}
+              </Text>
+            </TouchableOpacity>
+          ))}
         </View>
       </View>
 
-      {/* Quick minute presets */}
+      {/* Minute Presets */}
       <View style={styles.presetsRow}>
         {[0, 15, 30, 45].map((m) => (
           <TouchableOpacity
@@ -178,22 +173,57 @@ export default function TimePickerRoller({
 
 const styles = StyleSheet.create({
   container: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    borderColor: THEME.colors.glassBorderHighlight,
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
     borderWidth: 1,
-    borderRadius: THEME.radius.card,
+    borderRadius: 20,
     padding: 16,
     marginTop: 8,
-    marginBottom: 10,
+    marginBottom: 8,
     alignItems: 'center',
   },
   title: {
     fontSize: 11,
-    fontWeight: '800',
-    color: THEME.colors.accentSecondary,
-    letterSpacing: 1.2,
-    marginBottom: 12,
+    fontWeight: '700',
+    color: '#94A3B8',
+    letterSpacing: 1.1,
+    marginBottom: 14,
   },
+
+  // ── Quick presets ─────────────────────────────────────────────────────────
+  relativeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 16,
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderColor: '#E2E8F0',
+    borderWidth: 1,
+    gap: 8,
+  },
+  relativeLabel: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  relativeBtn: {
+    backgroundColor: '#ECFDF5',
+    borderWidth: 1,
+    borderColor: 'rgba(167, 243, 208, 0.8)',
+    paddingVertical: 5,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+  },
+  relativeBtnText: {
+    color: '#059669',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+
+  // ── Picker columns ────────────────────────────────────────────────────────
   pickerRow: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -203,7 +233,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   stepBtn: {
-    backgroundColor: 'rgba(255, 255, 255, 0.07)',
+    backgroundColor: '#FFFFFF',
     width: 48,
     height: 32,
     borderRadius: 10,
@@ -211,68 +241,81 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     marginVertical: 4,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.10)',
+    borderColor: '#E2E8F0',
   },
   stepBtnText: {
-    fontSize: 12,
-    color: THEME.colors.accentPrimary,
-    fontWeight: 'bold',
+    fontSize: 11,
+    color: '#6366F1',
+    fontWeight: '700',
   },
   digitBox: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
+    backgroundColor: '#FFFFFF',
     borderRadius: 16,
-    width: 62,
-    height: 58,
+    width: 64,
+    height: 64,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.16)',
+    borderColor: '#E2E8F0',
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 6,
+    elevation: 2,
   },
   digitText: {
     fontSize: 26,
     fontWeight: '800',
-    color: '#ffffff',
+    color: '#0F172A',
+    letterSpacing: -0.5,
   },
   digitLabel: {
-    fontSize: 8,
-    fontWeight: '800',
-    color: THEME.colors.textTertiary,
-    letterSpacing: 0.5,
+    fontSize: 9,
+    fontWeight: '700',
+    color: '#94A3B8',
+    letterSpacing: 0.8,
     marginTop: 1,
   },
   colon: {
-    fontSize: 30,
-    fontWeight: 'bold',
-    color: THEME.colors.accentPrimary,
+    fontSize: 28,
+    fontWeight: '700',
+    color: '#6366F1',
     marginHorizontal: 10,
-    marginBottom: 6,
+    marginBottom: 4,
   },
   periodCol: {
     marginLeft: 16,
     justifyContent: 'center',
-    gap: 6,
+    gap: 8,
   },
   periodBtn: {
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
+    borderColor: '#E2E8F0',
     borderRadius: 12,
-    paddingVertical: 9,
+    paddingVertical: 10,
     paddingHorizontal: 14,
     alignItems: 'center',
   },
   periodBtnActive: {
-    backgroundColor: THEME.colors.accentPrimary,
-    borderColor: THEME.colors.accentPrimary,
+    backgroundColor: '#6366F1',
+    borderColor: '#6366F1',
+    shadowColor: '#6366F1',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 6,
+    elevation: 3,
   },
   periodText: {
     fontSize: 13,
     fontWeight: '700',
-    color: THEME.colors.textSecondary,
+    color: '#64748B',
   },
   periodTextActive: {
     color: '#ffffff',
   },
+
+  // ── Minute presets ────────────────────────────────────────────────────────
   presetsRow: {
     flexDirection: 'row',
     marginTop: 14,
@@ -280,56 +323,24 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   presetChip: {
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.10)',
+    borderColor: '#E2E8F0',
     borderRadius: 10,
-    paddingVertical: 5,
+    paddingVertical: 6,
     paddingHorizontal: 12,
   },
   presetChipActive: {
-    backgroundColor: 'rgba(139, 124, 255, 0.20)',
-    borderColor: THEME.colors.accentPrimary,
+    backgroundColor: '#EEF2FF',
+    borderColor: '#C7D2FE',
   },
   presetText: {
     fontSize: 12,
     fontWeight: '600',
-    color: THEME.colors.textSecondary,
+    color: '#64748B',
   },
   presetTextActive: {
-    color: '#ffffff',
-    fontWeight: '700',
-  },
-  relativeRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 14,
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    paddingVertical: 7,
-    paddingHorizontal: 12,
-    borderRadius: 12,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
-    borderWidth: 1,
-    gap: 6,
-  },
-  relativeLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: THEME.colors.textSecondary,
-    marginRight: 4,
-  },
-  relativeBtn: {
-    backgroundColor: 'rgba(90, 200, 250, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(90, 200, 250, 0.30)',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 8,
-  },
-  relativeBtnText: {
-    color: THEME.colors.accentSecondary,
-    fontSize: 11,
+    color: '#6366F1',
     fontWeight: '700',
   },
 });

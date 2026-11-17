@@ -13,6 +13,7 @@ import android.os.Build
 import android.util.Log
 import androidx.core.app.NotificationCompat
 import androidx.core.app.NotificationManagerCompat
+import com.google.firebase.auth.FirebaseAuth
 
 object NudgrNotificationHelper {
     private const val TAG = "NudgrNotifHelper"
@@ -77,8 +78,12 @@ object NudgrNotificationHelper {
         nudgeId: String,
         triggerId: String,
         senderName: String,
-        message: String
+        message: String,
+        recipientUid: String = FirebaseAuth.getInstance().currentUser?.uid ?: "",
+        expiresAt: Long = System.currentTimeMillis() + 300_000L
     ): Boolean {
+        if (!NudgrIncomingPolicy.accepts(recipientUid, FirebaseAuth.getInstance().currentUser?.uid, expiresAt) ||
+            nudgeId.isBlank() || triggerId.isBlank() || nudgeId.contains('/') || triggerId.contains('/')) return true
         createNotificationChannel(context)
 
         val notificationManager = context.getSystemService(Context.NOTIFICATION_SERVICE) as? NotificationManager ?: return false
@@ -97,6 +102,9 @@ object NudgrNotificationHelper {
             Log.d(TAG, "[NATIVE_NOTIFICATION_DEDUPLICATED] nudgeId=$nudgeId triggerId=$triggerId")
             return true
         }
+        if (!sameTrigger) NudgrIncomingState.received(context, nudgeId, triggerId, senderName, recipientUid, expiresAt)
+        val nonce = NudgrIncomingState.get(context, nudgeId)?.optString("intentNonce") ?: return true
+        if (nonce.isEmpty()) return true
         if (!NotificationManagerCompat.from(context).areNotificationsEnabled() ||
             (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O &&
                 notificationManager.getNotificationChannel(CHANNEL_ID)?.importance == NotificationManager.IMPORTANCE_NONE)) {
@@ -114,6 +122,7 @@ object NudgrNotificationHelper {
             putExtra("triggerEventId", triggerId)
             putExtra("action", "ANSWER")
             putExtra("startAnswered", true)
+            putExtra("authNonce", nonce)
             putExtra("notificationTag", tag)
             putExtra("notificationId", NOTIFICATION_ID)
         }
@@ -131,6 +140,7 @@ object NudgrNotificationHelper {
             putExtra("triggerId", triggerId)
             putExtra("triggerEventId", triggerId)
             putExtra("action", "DECLINE")
+            putExtra("authNonce", nonce)
             putExtra("notificationTag", tag)
             putExtra("notificationId", NOTIFICATION_ID)
         }
@@ -151,6 +161,7 @@ object NudgrNotificationHelper {
             putExtra("triggerEventId", triggerId)
             putExtra("action", "OPEN")
             putExtra("startAnswered", false)
+            putExtra("authNonce", nonce)
             putExtra("notificationTag", tag)
             putExtra("notificationId", NOTIFICATION_ID)
         }
@@ -164,6 +175,7 @@ object NudgrNotificationHelper {
         // 4. Delete PendingIntent (User dismisses/swipes away notification)
         val deleteIntent = Intent(context, NudgrNotificationActionReceiver::class.java).apply {
             action = NudgrNotificationActionReceiver.ACTION_DISMISSED
+            putExtra("authNonce", nonce)
             putExtra("nudgeId", nudgeId)
             putExtra("triggerId", triggerId)
             putExtra("triggerEventId", triggerId)
@@ -186,7 +198,10 @@ object NudgrNotificationHelper {
             .setContentText(body)
             .setPriority(NotificationCompat.PRIORITY_MAX)
             .setCategory(NotificationCompat.CATEGORY_CALL)
-            .setVisibility(NotificationCompat.VISIBILITY_PUBLIC)
+            .setVisibility(NotificationCompat.VISIBILITY_PRIVATE)
+            .setPublicVersion(NotificationCompat.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.mipmap.ic_launcher).setContentTitle("Incoming Nudgr")
+                .setContentText("Unlock to view").build())
             .setAutoCancel(true)
             .setOngoing(false)
             .setColor(Color.parseColor("#2e7d32"))
@@ -203,7 +218,6 @@ object NudgrNotificationHelper {
         if (fullScreenAllowed) builder.setFullScreenIntent(contentPendingIntent, true)
         builder.addExtras(android.os.Bundle().apply { putBoolean("nudgr_native", true) })
         val notification = builder.build().apply { flags = flags or Notification.FLAG_INSISTENT }
-        if (!sameTrigger) NudgrIncomingState.received(context, nudgeId, triggerId, senderName)
         notificationManager.notify(tag, NOTIFICATION_ID, notification)
         recentPosts[nudgeId] = android.os.SystemClock.elapsedRealtime()
         Log.d(TAG, "[NATIVE_NOTIFICATION_POSTED] tag=$tag nudgeId=$nudgeId triggerId=$triggerId fullScreenAllowed=$fullScreenAllowed")

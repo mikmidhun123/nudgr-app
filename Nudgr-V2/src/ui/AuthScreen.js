@@ -9,11 +9,15 @@ import {
   KeyboardAvoidingView,
   Platform,
   StatusBar,
+  ScrollView,
 } from 'react-native';
 import { getAuth } from '../firebase';
+import { ensureUserProfile } from '../db/users';
+import AmbientBackground from './AmbientBackground';
 import { THEME } from './theme';
 
 const AUTH_ERRORS = {
+  'auth/invalid-credential': 'Email or password is incorrect.',
   'auth/invalid-email': 'Please enter a valid email address.',
   'auth/user-not-found': 'No account found for that email.',
   'auth/wrong-password': 'Incorrect password.',
@@ -55,6 +59,8 @@ export default function AuthScreen() {
       if (mode === 'signup') {
         const credential = await getAuth().createUserWithEmailAndPassword(email.trim(), password);
         await credential.user.updateProfile({ displayName: displayName.trim() });
+        // Auth observers can run before updateProfile completes during signup.
+        await ensureUserProfile(credential.user);
       } else {
         await getAuth().signInWithEmailAndPassword(email.trim(), password);
       }
@@ -72,77 +78,133 @@ export default function AuthScreen() {
       style={styles.container}
       behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <StatusBar barStyle="light-content" backgroundColor={THEME.colors.bg} />
+      <StatusBar barStyle="dark-content" backgroundColor="#F6F7FC" />
+      <AmbientBackground />
 
-      <View style={styles.brandBox}>
-        <View style={styles.logoBadge}>
-          <Text style={styles.logoBadgeText}>N</Text>
-        </View>
-        <Text style={styles.title}>
-          Nudgr<Text style={styles.titleDot}>.</Text>
-        </Text>
-        <Text style={styles.subtitle}>
-          {isSignup ? 'Create an account to start connecting' : 'Welcome back'}
-        </Text>
-      </View>
-
-      <View style={styles.card}>
-        {isSignup && (
-          <TextInput
-            style={styles.input}
-            placeholder="Your name"
-            placeholderTextColor={THEME.colors.textTertiary}
-            value={displayName}
-            onChangeText={setDisplayName}
-            autoCapitalize="words"
-            autoCorrect={false}
-          />
-        )}
-        <TextInput
-          style={styles.input}
-          placeholder="Email address"
-          placeholderTextColor={THEME.colors.textTertiary}
-          value={email}
-          onChangeText={setEmail}
-          autoCapitalize="none"
-          autoCorrect={false}
-          keyboardType="email-address"
-        />
-        <TextInput
-          style={styles.input}
-          placeholder="Password"
-          placeholderTextColor={THEME.colors.textTertiary}
-          value={password}
-          onChangeText={setPassword}
-          secureTextEntry
-        />
-
-        {error && (
-          <View style={styles.errorBox}>
-            <Text style={styles.errorText}>{error}</Text>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* ── Brand Hero ── */}
+        <View style={styles.brandHero}>
+          <View style={styles.logoBadge}>
+            <Text style={styles.logoBadgeText}>N</Text>
           </View>
-        )}
+          <Text style={styles.wordmark}>
+            Nudgr<Text style={styles.wordmarkDot}>.</Text>
+          </Text>
+          <Text style={styles.tagline}>Smart arrival reminders</Text>
+        </View>
 
-        <TouchableOpacity
-          style={[styles.primaryButton, busy && styles.btnDisabled]}
-          onPress={submit}
-          disabled={busy}
-          activeOpacity={0.85}
-        >
-          {busy ? (
-            <ActivityIndicator color="#ffffff" />
-          ) : (
-            <Text style={styles.primaryButtonText}>{isSignup ? 'Create Account' : 'Sign In'}</Text>
+        {/* ── Mode Switcher Pill ── */}
+        <View style={styles.modeSwitcher}>
+          <TouchableOpacity
+            style={[styles.modeTab, !isSignup && styles.modeTabActive]}
+            onPress={() => { setMode('login'); setError(null); }}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.modeTabText, !isSignup && styles.modeTabTextActive]}>
+              Sign In
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.modeTab, isSignup && styles.modeTabActive]}
+            onPress={() => { setMode('signup'); setError(null); }}
+            activeOpacity={0.8}
+          >
+            <Text style={[styles.modeTabText, isSignup && styles.modeTabTextActive]}>
+              Create Account
+            </Text>
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Form Card ── */}
+        <View style={styles.card}>
+          <Text style={styles.cardHeading}>
+            {isSignup ? 'Welcome to Nudgr' : 'Welcome back'}
+          </Text>
+          <Text style={styles.cardSubheading}>
+            {isSignup
+              ? 'Create your account to start sending location reminders.'
+              : 'Sign in to continue to your reminders.'}
+          </Text>
+
+          {isSignup && (
+            <View style={styles.inputGroup}>
+              <Text style={styles.inputLabel}>FULL NAME</Text>
+              <TextInput
+                style={styles.input}
+                placeholder="Your name"
+                placeholderTextColor="#94A3B8"
+                value={displayName}
+                onChangeText={setDisplayName}
+                autoCapitalize="words"
+                autoCorrect={false}
+              />
+            </View>
           )}
-        </TouchableOpacity>
 
+          <View style={styles.inputGroup}>
+            <Text style={styles.inputLabel}>EMAIL</Text>
+            <TextInput
+              style={styles.input}
+              placeholder="your@email.com"
+              placeholderTextColor="#94A3B8"
+              value={email}
+              onChangeText={setEmail}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+            />
+          </View>
+
+          <View style={styles.inputGroup}>
+            <Text style={styles.inputLabel}>PASSWORD</Text>
+            <TextInput
+              style={styles.input}
+              placeholder={isSignup ? 'Min. 6 characters' : 'Your password'}
+              placeholderTextColor="#94A3B8"
+              value={password}
+              onChangeText={setPassword}
+              secureTextEntry
+            />
+          </View>
+
+          {error && (
+            <View style={styles.errorBox}>
+              <Text style={styles.errorDot}>!</Text>
+              <Text style={styles.errorText}>{error}</Text>
+            </View>
+          )}
+
+          <TouchableOpacity
+            style={[styles.primaryButton, busy && styles.btnDisabled]}
+            onPress={submit}
+            disabled={busy}
+            activeOpacity={0.85}
+          >
+            {busy ? (
+              <ActivityIndicator color="#ffffff" />
+            ) : (
+              <Text style={styles.primaryButtonText}>
+                {isSignup ? 'Create Account' : 'Sign In'}
+              </Text>
+            )}
+          </TouchableOpacity>
+        </View>
+
+        {/* ── Switch Mode Footer ── */}
         <TouchableOpacity onPress={switchMode} disabled={busy} style={styles.switchBtn} activeOpacity={0.7}>
           <Text style={styles.switchText}>
-            {isSignup ? 'Already have an account? ' : "Don't have an account? "}
-            <Text style={styles.switchHighlight}>{isSignup ? 'Sign in' : 'Sign up'}</Text>
+            {isSignup ? 'Already have an account?' : "Don't have an account?"}
+            {'  '}
+            <Text style={styles.switchHighlight}>
+              {isSignup ? 'Sign in' : 'Sign up'}
+            </Text>
           </Text>
         </TouchableOpacity>
-      </View>
+      </ScrollView>
     </KeyboardAvoidingView>
   );
 }
@@ -150,113 +212,201 @@ export default function AuthScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: THEME.colors.bg,
-    padding: 24,
+    backgroundColor: '#F6F7FC',
+  },
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 24,
+    paddingTop: 60,
+    paddingBottom: 40,
     justifyContent: 'center',
   },
-  brandBox: {
+
+  // ── Brand Hero ──────────────────────────────────────────────────────────────
+  brandHero: {
     alignItems: 'center',
-    marginBottom: 28,
+    marginBottom: 32,
   },
   logoBadge: {
-    width: 56,
-    height: 56,
-    borderRadius: 18,
-    backgroundColor: THEME.colors.accentPrimary,
+    width: 68,
+    height: 68,
+    borderRadius: 22,
+    backgroundColor: '#6366F1',
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 14,
-    shadowColor: THEME.colors.accentPrimary,
+    marginBottom: 16,
+    shadowColor: '#6366F1',
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.45,
+    shadowOpacity: 0.35,
     shadowRadius: 14,
     elevation: 8,
   },
   logoBadgeText: {
-    fontSize: 28,
+    fontSize: 32,
     fontWeight: '900',
     color: '#ffffff',
+    letterSpacing: -1.5,
+  },
+  wordmark: {
+    fontSize: 36,
+    fontWeight: '800',
+    color: '#0F172A',
     letterSpacing: -1,
   },
-  title: {
-    fontSize: 34,
-    fontWeight: '800',
-    color: THEME.colors.textPrimary,
-    letterSpacing: -0.8,
+  wordmarkDot: {
+    color: '#6366F1',
+    fontWeight: '900',
   },
-  titleDot: {
-    color: THEME.colors.accentPrimary,
-  },
-  subtitle: {
+  tagline: {
     fontSize: 14,
-    color: THEME.colors.textSecondary,
+    fontWeight: '500',
+    color: '#64748B',
     marginTop: 6,
-    textAlign: 'center',
+    letterSpacing: 0.2,
   },
-  card: {
-    backgroundColor: THEME.colors.bgCard,
+
+  // ── Mode Switcher ─────────────────────────────────────────────────────────
+  modeSwitcher: {
+    flexDirection: 'row',
+    backgroundColor: '#EEF2FF',
     borderWidth: 1,
-    borderColor: THEME.colors.glassBorder,
-    borderRadius: THEME.radius.cardLg,
+    borderColor: '#C7D2FE',
+    borderRadius: 24,
+    padding: 4,
+    marginBottom: 20,
+  },
+  modeTab: {
+    flex: 1,
+    paddingVertical: 10,
+    alignItems: 'center',
+    borderRadius: 20,
+  },
+  modeTabActive: {
+    backgroundColor: '#6366F1',
+    shadowColor: '#6366F1',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.30,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  modeTabText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: '#64748B',
+  },
+  modeTabTextActive: {
+    color: '#ffffff',
+    fontWeight: '700',
+  },
+
+  // ── Form Card ─────────────────────────────────────────────────────────────
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.95)',
+    borderRadius: 28,
     padding: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 10 },
-    shadowOpacity: 0.4,
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.08,
     shadowRadius: 20,
-    elevation: 6,
+    elevation: 4,
+    marginBottom: 16,
+  },
+  cardHeading: {
+    fontSize: 22,
+    fontWeight: '800',
+    color: '#0F172A',
+    letterSpacing: -0.4,
+    marginBottom: 4,
+  },
+  cardSubheading: {
+    fontSize: 13,
+    color: '#64748B',
+    lineHeight: 19,
+    marginBottom: 22,
+  },
+  inputGroup: {
+    marginBottom: 16,
+  },
+  inputLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#94A3B8',
+    letterSpacing: 1.1,
+    marginBottom: 6,
   },
   input: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
-    borderColor: THEME.colors.glassBorder,
+    borderColor: '#E2E8F0',
     borderRadius: 16,
     paddingHorizontal: 16,
-    paddingVertical: 14,
+    paddingVertical: 13,
     fontSize: 16,
-    color: THEME.colors.textPrimary,
-    marginBottom: 14,
+    color: '#0F172A',
   },
   errorBox: {
-    backgroundColor: 'rgba(255, 69, 58, 0.15)',
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 8,
+    backgroundColor: '#FEF2F2',
     borderWidth: 1,
-    borderColor: 'rgba(255, 69, 58, 0.3)',
+    borderColor: 'rgba(254, 202, 202, 0.8)',
     borderRadius: 12,
-    padding: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
     marginBottom: 14,
   },
+  errorDot: {
+    color: '#EF4444',
+    fontSize: 14,
+    fontWeight: '800',
+    lineHeight: 19,
+  },
   errorText: {
-    color: '#fca5a5',
+    flex: 1,
+    color: '#DC2626',
     fontSize: 13,
-    textAlign: 'center',
     fontWeight: '500',
+    lineHeight: 19,
   },
   primaryButton: {
-    ...THEME.buttonPrimary,
-    borderRadius: 16,
+    backgroundColor: '#6366F1',
+    borderRadius: 18,
     paddingVertical: 15,
-    marginTop: 4,
-    marginBottom: 16,
+    marginTop: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#6366F1',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 12,
+    elevation: 6,
   },
   btnDisabled: {
     opacity: 0.5,
+    shadowOpacity: 0,
   },
   primaryButtonText: {
     color: '#ffffff',
     fontSize: 16,
-    fontWeight: '800',
-    letterSpacing: 0.2,
+    fontWeight: '700',
+    letterSpacing: 0.1,
   },
+
+  // ── Switch Footer ─────────────────────────────────────────────────────────
   switchBtn: {
-    paddingVertical: 6,
+    paddingVertical: 10,
     alignItems: 'center',
   },
   switchText: {
-    color: THEME.colors.textSecondary,
+    color: '#64748B',
     fontSize: 14,
     textAlign: 'center',
   },
   switchHighlight: {
-    color: THEME.colors.accentSecondary,
+    color: '#6366F1',
     fontWeight: '700',
   },
 });

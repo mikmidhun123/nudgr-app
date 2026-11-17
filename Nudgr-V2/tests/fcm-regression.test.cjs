@@ -7,20 +7,25 @@ const babel = require('@babel/core');
 const parser = require('@babel/parser');
 const root = path.resolve(__dirname, '..');
 const quiet = { log() {}, warn() {}, error() {} };
+const incomingPolicy = {};
+vm.runInNewContext(require('typescript').transpileModule(fs.readFileSync(path.join(root, 'src/runtime/incoming.ts'), 'utf8'),
+  { compilerOptions: { module: require('typescript').ModuleKind.CommonJS } }).outputText, { exports: incomingPolicy });
 
 function backend({ tokens = { testToken: true }, result, sendError, cleanupError } = {}) {
-  const event = { status: 'CREATED' };
+  const event = { status: 'CREATED', nudgeId: 'nudge1', senderUid: 'sender', recipientUid: 'recipient' };
   const writes = [];
   const payloads = [];
   const logs = [];
   const ref = { async update(update) { writes.push(update); Object.assign(event, update); } };
-  const nudge = { senderName: 'Alice', senderUid: 'sender', recipientUid: 'recipient', message: 'Hello' };
+  const nudge = { senderName: 'Alice', senderUid: 'sender', recipientUid: 'recipient', message: 'Hello', status: 'triggered' };
   let serial = Promise.resolve();
   const firestore = {
     collection(collection) {
       return { doc() { return {
-        async get() { return { exists: true, data: () => collection === 'nudges' ? nudge : { fcmTokens: tokens } }; },
+        async get() { return { exists: true, data: () => collection === 'nudges' ? nudge : collection === 'connections'
+          ? { users: ['recipient', 'sender'], status: 'connected', verification: 'invitation-code' } : { fcmTokens: tokens } }; },
         async update() { if (cleanupError) throw cleanupError; },
+        collection() { return { get: async () => ({ docs: [] }) }; },
       }; } };
     },
     runTransaction(callback) {
@@ -44,8 +49,9 @@ function backend({ tokens = { testToken: true }, result, sendError, cleanupError
     } }),
   };
   const functions = {
-    firestore: { document: () => ({ onCreate: callback => callback }) },
+    firestore: { document: () => ({ onCreate: callback => callback, onWrite: callback => callback }) },
     https: { onRequest: callback => callback },
+    pubsub: { schedule: () => ({ onRun: callback => callback }) },
     logger: Object.fromEntries(['info', 'warn', 'error'].map(level => [level, text => logs.push(text)])),
   };
   const exports = {};
@@ -54,6 +60,7 @@ function backend({ tokens = { testToken: true }, result, sendError, cleanupError
       if (name === 'firebase-admin/app') return { initializeApp: admin.initializeApp };
       if (name === 'firebase-admin/firestore') return { getFirestore: admin.firestore, FieldValue: admin.firestore.FieldValue };
       if (name === 'firebase-admin/messaging') return { getMessaging: admin.messaging };
+      if (name === './delivery') return require('../functions/delivery');
       return functions;
     },
   });
@@ -71,6 +78,7 @@ test('notification + data uses the installed Admin SDK schema and marks acceptan
   assert.deepEqual(payload.data, {
     nudgeId: 'nudge1', triggerEventId: 'trigger1', type: 'nudge_incoming',
     senderUid: 'sender', recipientUid: 'recipient', senderName: 'Alice', message: 'Hello',
+    expiresAt: String(fixture.event.expiresAtMs),
   });
   assert.equal(payload.android.priority, 'high');
   assert.equal(payload.android.notification.channelId, 'nudgr_calls_v3');
@@ -82,7 +90,7 @@ test('notification + data uses the installed Admin SDK schema and marks acceptan
   const { tokens, ...message } = payload;
   validateMessage({ ...message, token: tokens[0] });
   assert.equal(message.android.notification.notification_priority, 'PRIORITY_MAX');
-  assert.equal(message.android.notification.visibility, 'PUBLIC');
+  assert.equal(message.android.notification.visibility, 'PRIVATE');
   assert.equal(fixture.event.status, 'FCM_SENT');
   assert.equal(fixture.event.fcmSuccessCount, 1);
   assert.ok(fixture.logs.every(log => !log.includes('testToken')));
@@ -238,8 +246,9 @@ test('per-Nudgr cold Decline is retained even when another Nudgr is the current 
   const exports = {};
   vm.runInNewContext(source, { exports, console: quiet, __DEV__: false, require(name) {
     if (name === './nativeNotificationBridge') return {
-      getNativeIncomingState: async id => ({ nudgeId: id, state: 'declined', timestamp: 1 }),
+      getNativeIncomingState: async id => ({ nudgeId: id, recipientUid: 'recipient', state: 'declined', timestamp: 1 }),
     };
+    if (name === '../firebase') return { getAuth: () => ({ currentUser: { uid: 'recipient' } }) };
     return { __esModule: true, default: { getItem: async () => JSON.stringify({ nudgeId: 'another', state: 'ringing', timestamp: Date.now() }) } };
   } });
   const state = await exports.getIncomingState('declined-nudge');
@@ -255,12 +264,14 @@ test('module-scope headless callback uses the native poster with the trigger ID'
   let callback;
   const posted = [];
   vm.runInNewContext(source.slice(registration.start, registration.end), {
+    parseIncoming: incomingPolicy.parseIncoming,
+    getAuth: () => ({ currentUser: { uid: 'recipient' } }),
     messaging: () => ({ setBackgroundMessageHandler: handler => { callback = handler; } }),
     showNativeIncomingNotification: async params => { posted.push(params); return true; },
     showIncomingNudgeNotification: async () => { throw new Error('Expo must not replace native posting'); },
     recordRuntimeStatus: async () => {}, console: quiet,
   });
-  await callback({ notification: { title: 'Nudgr' }, data: { nudgeId: 'nudge1', triggerEventId: 'trigger1', senderName: 'Alice', message: 'Hello' } });
+  await callback({ sentTime: Date.now(), notification: { title: 'Nudgr' }, data: { recipientUid: 'recipient', nudgeId: 'nudge1', triggerEventId: 'trigger1', senderName: 'Alice', message: 'Hello' } });
   assert.equal(posted.length, 1);
   assert.equal(posted[0].triggerId, 'trigger1');
 });
@@ -269,8 +280,9 @@ test('token registration and refresh serialize to the nested map read by the bac
   const { Firestore } = require('../functions/node_modules/@google-cloud/firestore');
   const firestore = new Firestore({ projectId: 'offline-test' });
   const writes = [];
+  const privateWrites = [];
   let refresh;
-  const ref = { async set(data, options) {
+  const ref = { collection: () => ({ doc: () => ({ set: async data => privateWrites.push(data) }) }), async set(data, options) {
     assert.equal(options.merge, true);
     writes.push(firestore._serializer.encodeFields(data));
   } };
@@ -278,19 +290,29 @@ test('token registration and refresh serialize to the nested map read by the bac
     configFile: false, babelrc: false, plugins: ['@babel/plugin-transform-modules-commonjs'],
   }).code;
   const exports = {};
-  vm.runInNewContext(source, { exports, console: quiet, __DEV__: false, require() { return {
+  const storage = new Map();
+  vm.runInNewContext(source, { exports, console: quiet, __DEV__: false, require(name) {
+    if (name === '@react-native-async-storage/async-storage') return { __esModule: true, default: {
+      getItem: async key => storage.get(key), setItem: async (key, value) => storage.set(key, value),
+    } };
+    if (name === 'react-native') return { Platform: { OS: 'android' } };
+    return {
     getAuth: () => ({ currentUser: { uid: 'recipient' } }),
     getMessaging: () => ({ getToken: async () => 'initial-token', onTokenRefresh: callback => { refresh = callback; } }),
     getFirestore: () => ({ collection: () => ({ doc: () => ref }) }),
     getServerTimestamp: () => 1,
-  }; } });
+   }; } });
   await exports.syncFcmToken({ uid: 'recipient' });
   exports.attachFcmTokenRefresh();
-  refresh('rotated-token');
+  await refresh('rotated-token');
   assert.equal(writes.length, 2);
   assert.equal(writes[0].fcmTokens.mapValue.fields['initial-token'].booleanValue, true);
   assert.equal(writes[1].fcmTokens.mapValue.fields['rotated-token'].booleanValue, true);
   assert.ok(writes.every(write => !Object.keys(write).some(key => key.startsWith('fcmTokens.'))));
+  assert.equal(privateWrites.length, 2);
+  assert.equal(privateWrites[0].fcmToken, 'initial-token');
+  assert.equal(privateWrites[1].fcmToken, 'rotated-token');
+  assert.equal(privateWrites[0].deviceId, privateWrites[1].deviceId);
 });
 
 test('actual module-scope background callback handles notification + data without interactive permissions', async () => {
@@ -303,11 +325,13 @@ test('actual module-scope background callback handles notification + data withou
   let callback;
   vm.runInNewContext(source.slice(registration.start, registration.end), {
     Platform: { OS: 'android' },
+    parseIncoming: incomingPolicy.parseIncoming,
+    getAuth: () => ({ currentUser: { uid: 'recipient' } }),
     messaging: () => ({ setBackgroundMessageHandler: handler => { callback = handler; } }),
     showIncomingNudgeNotification: fixture.exports.showIncomingNudgeNotification,
     recordRuntimeStatus: async () => {}, console: quiet,
   });
-  await callback({ notification: { title: '📍 Nudgr' }, data: { nudgeId: 'nudge1', senderName: 'Alice' } });
+  await callback({ sentTime: Date.now(), notification: { title: '📍 Nudgr' }, data: { recipientUid: 'recipient', triggerEventId: 't1', nudgeId: 'nudge1', senderName: 'Alice' } });
   assert.equal(fixture.requests.length, 1);
   assert.equal(fixture.requests[0].identifier, 'nudgr_nudge1');
   assert.equal(fixture.permissionRequests(), 0);
@@ -395,12 +419,12 @@ test('Android ringtone can start and preload without the missing Expo filesystem
   let loads = 0, stops = 0, unloads = 0;
   vm.runInNewContext(source, { exports, console: quiet, __DEV__: false, require(name) {
     if (name === 'react-native') return { Platform: { OS: 'android' } };
-    if (name === 'expo-av') return { Audio: {
+    if (name === '../voice/audio') return { Audio: {
       setAudioModeAsync: async () => {},
       Sound: { async createAsync(asset, status, callback, downloadFirst = true) {
         if (downloadFirst) throw new Error("ExpoAsset.downloadAsync: AppDirectories module not found");
         loads++;
-        return { sound: { stopAsync: async () => { stops++; }, unloadAsync: async () => { unloads++; } } };
+        return { sound: { playAsync: async () => {}, stopAsync: async () => { stops++; }, unloadAsync: async () => { unloads++; } } };
       } },
     } };
     return 123; // Metro's bundled raw-resource reference.

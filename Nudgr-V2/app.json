@@ -2,7 +2,7 @@
   "expo": {
     "name": "Nudgr",
     "slug": "nudgr",
-    "version": "1.0.0",
+    "version": "1.0.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "scheme": "nudgr",
@@ -12,12 +12,15 @@
       "@react-native-firebase/app",
       "@react-native-firebase/auth",
       "@react-native-firebase/messaging",
+      "@react-native-firebase/crashlytics",
       "expo-location",
       "expo-asset",
       [
         "expo-notifications",
         {
-          "sounds": ["./assets/sounds/ringtone.mp3"]
+          "sounds": [
+            "./assets/sounds/ringtone.mp3"
+          ]
         }
       ]
     ],
@@ -54,7 +57,7 @@
         "RECEIVE_BOOT_COMPLETED"
       ],
       "package": "com.nudgr",
-      "versionCode": 1
+      "versionCode": 2
     },
     "ios": {
       "supportsTablet": true

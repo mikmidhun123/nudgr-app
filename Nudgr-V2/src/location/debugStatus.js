@@ -4,7 +4,6 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import {
   GEOFENCE_TASK,
   GEOFENCE_NUDGES_STORAGE_KEY,
-  areGeofencesActive,
   getRegisteredGeofences,
   registerGeofencesForNudges,
 } from './backgroundGeofence';

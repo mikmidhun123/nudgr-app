@@ -1,200 +1,90 @@
-import { Audio } from 'expo-av';
+import { Audio } from './audio';
 import { speakNudge, stopSpeech, VOICE_STYLES } from './tts';
-import { getVoiceDownloadUrl } from './r2Storage';
+import { getVoiceDownloadUrl, getDirectVoiceSource } from './r2Storage';
 
 let activeSound = null;
 let isPlayingAudio = false;
+let generation = 0;
+const cancelled = () => ({ type: 'silent', cancelled: true });
 
-/**
- * Automatically plays the Nudgr message using either the Cloudflare R2 recorded voice note
- * or the configured TTS voice style, with automatic TTS fallback.
- *
- * @param {object} params
- * @param {object} params.nudge - The Nudgr document data
- * @param {function} [params.onStart] - Callback when playback starts
- * @param {function} [params.onDone] - Callback when playback finishes
- * @param {function} [params.onError] - Callback if an error occurs
- * @returns {Promise<{type: 'voice_note' | 'tts' | 'silent'}>}
- */
-export async function playNudgeMessage({ nudge, onStart, onDone, onError }) {
-  if (!nudge) {
-    if (onDone) onDone();
-    return { type: 'silent' };
-  }
-
-  // Stop any ongoing playback first
-  await stopNudgeMessage();
-
-  const voiceNote = nudge.voiceNote;
-  const directVoiceUrl = nudge.voiceUrl || nudge.audioUrl || nudge.recordingUrl;
-  const message = nudge.message || '';
-  const voiceStyle = nudge.voiceStyle || 'normal';
-
-  // 1. Cloudflare R2 Voice Note playback via signed download URL
-  if (voiceNote?.enabled && voiceNote?.storageKey) {
-    try {
-      if (onStart) onStart({ type: 'voice_note' });
-
-      // Request secure signed download URL from backend
-      const { downloadUrl } = await getVoiceDownloadUrl(nudge.id, voiceNote.storageKey);
-
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: false,
-        playThroughEarpieceAndroid: false,
-      });
-
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: downloadUrl },
-        { shouldPlay: true, isLooping: false, volume: 1.0 },
-        (status) => {
-          if (status.didJustFinish) {
-            isPlayingAudio = false;
-            if (activeSound) {
-              activeSound.unloadAsync().catch(() => {});
-              activeSound = null;
-            }
-            if (onDone) onDone();
-          }
-        }
-      );
-
-      activeSound = sound;
-      isPlayingAudio = true;
-      return { type: 'voice_note' };
-    } catch (err) {
-      if (__DEV__) console.warn('[playback:r2_voice_note_fallback]', err.message);
-      // Automatic fallback to configured TTS voice on any R2 failure
-      if (message.trim() && voiceStyle !== 'none') {
-        return playTtsMessage({ message, voiceStyle, onStart, onDone, onError });
-      }
-      if (onError) onError(err);
-      if (onDone) onDone();
-      return { type: 'voice_note', error: err };
-    }
-  }
-
-  // 2. Direct audio URL fallback
-  if (directVoiceUrl && typeof directVoiceUrl === 'string' && directVoiceUrl.trim()) {
-    try {
-      if (onStart) onStart({ type: 'voice_note' });
-
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: false,
-        playThroughEarpieceAndroid: false,
-      });
-
-      const { sound } = await Audio.Sound.createAsync(
-        { uri: directVoiceUrl.trim() },
-        { shouldPlay: true, isLooping: false, volume: 1.0 },
-        (status) => {
-          if (status.didJustFinish) {
-            isPlayingAudio = false;
-            if (activeSound) {
-              activeSound.unloadAsync().catch(() => {});
-              activeSound = null;
-            }
-            if (onDone) onDone();
-          }
-        }
-      );
-
-      activeSound = sound;
-      isPlayingAudio = true;
-      return { type: 'voice_note' };
-    } catch (err) {
-      if (__DEV__) console.warn('[playback:voice_note]', err.message);
-      // If voice URL playback fails, fallback to TTS
-      if (message.trim() && voiceStyle !== 'none') {
-        return playTtsMessage({ message, voiceStyle, onStart, onDone, onError });
-      }
-      if (onError) onError(err);
-      if (onDone) onDone();
-      return { type: 'voice_note', error: err };
-    }
-  }
-
-  // 2. Silent alert (voiceStyle === 'none')
-  if (voiceStyle === 'none') {
-    if (onStart) onStart({ type: 'silent' });
-    setTimeout(() => {
-      if (onDone) onDone();
-    }, 600);
-    return { type: 'silent' };
-  }
-
-  // 3. Local Text-to-Speech synthesis (expo-speech)
-  return playTtsMessage({ message, voiceStyle, onStart, onDone, onError });
-}
-
-function playTtsMessage({ message, voiceStyle = 'normal', onStart, onDone, onError }) {
-  if (voiceStyle === 'none') {
-    if (onStart) onStart({ type: 'silent' });
-    setTimeout(() => {
-      if (onDone) onDone();
-    }, 400);
-    return { type: 'silent' };
-  }
-
-  const cleanMessage = (message || '').trim();
-  if (!cleanMessage) {
-    if (onStart) onStart({ type: 'silent' });
-    if (onDone) onDone();
-    return { type: 'silent' };
-  }
-
-  const effectiveStyle = VOICE_STYLES[voiceStyle] ? voiceStyle : 'normal';
-
-  if (onStart) onStart({ type: 'tts', style: effectiveStyle });
-  isPlayingAudio = true;
-
-  try {
-    speakNudge(cleanMessage, effectiveStyle, {
-      onDone: () => {
-        isPlayingAudio = false;
-        if (onDone) onDone();
-      },
-      onStopped: () => {
-        isPlayingAudio = false;
-      },
-      onError: (err) => {
-        isPlayingAudio = false;
-        if (__DEV__) console.warn('[playback:tts]', err?.message || err);
-        if (onError) onError(err);
-        if (onDone) onDone();
-      },
-    });
-    return { type: 'tts', style: effectiveStyle };
-  } catch (err) {
-    isPlayingAudio = false;
-    if (onError) onError(err);
-    if (onDone) onDone();
-    return { type: 'tts', error: err };
-  }
-}
-
-/**
- * Stops any active voice note or TTS playback immediately and cleans up resources.
- */
-export async function stopNudgeMessage() {
+async function cleanUpPlayback() {
   isPlayingAudio = false;
-  stopSpeech();
-
-  if (activeSound) {
-    try {
-      await activeSound.stopAsync();
-      await activeSound.unloadAsync();
-    } catch (_) {}
-    activeSound = null;
+  const sound = activeSound;
+  activeSound = null;
+  await stopSpeech();
+  if (sound) {
+    try { await sound.stopAsync(); } catch (_) { /* Unload still releases an interrupted player. */ }
+    finally { await sound.unloadAsync().catch(() => {}); }
   }
 }
 
-/**
- * Returns whether audio is currently playing.
- */
-export function isNudgeAudioPlaying() {
-  return isPlayingAudio;
+export async function playNudgeMessage({ nudge, onStart, onDone, onError }) {
+  const ownGeneration = ++generation;
+  await cleanUpPlayback();
+  const current = () => ownGeneration === generation;
+  if (!current()) return cancelled();
+  if (!nudge) { onDone?.(); return { type: 'silent' }; }
+  const message = nudge.message || '', voiceStyle = nudge.voiceStyle || 'normal';
+  const directUrl = nudge.voiceUrl || nudge.audioUrl || nudge.recordingUrl;
+  if ((nudge.voiceNote?.enabled && nudge.voiceNote.storageKey) || (typeof directUrl === 'string' && directUrl.trim())) {
+    let sound;
+    try {
+      const source = nudge.voiceNote?.enabled && nudge.voiceNote.storageKey
+        ? await getVoiceDownloadUrl(nudge.id, nudge.voiceNote.storageKey)
+        : await getDirectVoiceSource(nudge.id, directUrl.trim());
+      if (!current()) return cancelled();
+      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, staysActiveInBackground: true,
+        shouldDuckAndroid: false, playThroughEarpieceAndroid: false });
+      if (!current()) return cancelled();
+      const loaded = await Audio.Sound.createAsync({ uri: source.downloadUrl, headers: source.headers },
+        { shouldPlay: false, isLooping: false, volume: 1 }, status => {
+          if (!current() || activeSound !== sound) return;
+          if (status.didJustFinish) {
+            activeSound = null;
+            isPlayingAudio = false;
+            sound.unloadAsync().catch(() => {});
+            onDone?.();
+          }
+        });
+      sound = loaded.sound;
+      if (!current()) { await sound.unloadAsync(); return cancelled(); }
+      activeSound = sound;
+      isPlayingAudio = true;
+      onStart?.({ type: 'voice_note' });
+      await sound.playAsync();
+      return current() ? { type: 'voice_note' } : cancelled();
+    } catch (error) {
+      if (activeSound === sound) activeSound = null;
+      await sound?.unloadAsync().catch(() => {});
+      if (!current()) return cancelled();
+      if (__DEV__) console.warn('[playback:voice_note_fallback]', error.message);
+      if (!message.trim() || voiceStyle === 'none') {
+        isPlayingAudio = false;
+        onError?.(error); onDone?.();
+        return { type: 'voice_note', error };
+      }
+    }
+  }
+  if (!current()) return cancelled();
+  if (voiceStyle === 'none' || !message.trim()) {
+    onStart?.({ type: 'silent' });
+    setTimeout(() => { if (current()) onDone?.(); }, 600);
+    return { type: 'silent' };
+  }
+  const style = VOICE_STYLES[voiceStyle] ? voiceStyle : 'normal';
+  onStart?.({ type: 'tts', style });
+  isPlayingAudio = true;
+  await speakNudge(message, style, {
+    onDone: () => { if (current()) { isPlayingAudio = false; onDone?.(); } },
+    onStopped: () => { if (current()) isPlayingAudio = false; },
+    onError: error => { if (current()) { isPlayingAudio = false; onError?.(error); } },
+  });
+  return current() ? { type: 'tts', style } : cancelled();
 }
+
+export async function stopNudgeMessage() {
+  generation += 1;
+  await cleanUpPlayback();
+}
+
+export function isNudgeAudioPlaying() { return isPlayingAudio; }

@@ -2,6 +2,8 @@ import { firebase } from '@react-native-firebase/app';
 import firestore from '@react-native-firebase/firestore';
 import '@react-native-firebase/auth';
 import '@react-native-firebase/messaging';
+import { NativeModules } from 'react-native';
+export const isQaBuild = NativeModules.NudgrNativeModule?.qaBuild === true;
 
 export const getApp = () => firebase.app();
 export const getAuth = () => firebase.auth();
@@ -27,10 +29,6 @@ const log = (tag, value) => {
 export function attachFirebaseFoundation() {
   const app = getApp();
   log('app', app.name);
-
-  getAuth().onAuthStateChanged((user) => {
-    log('auth', user ? `signed-in:${user.uid}` : 'signed-out');
-  });
 
   return app;
 }

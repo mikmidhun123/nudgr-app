@@ -5,6 +5,7 @@ import { dismissNativeNotification, isNativeNotificationActive, showNativeIncomi
 import { getIncomingState, INCOMING_STATES } from './incomingState';
 
 export const NUDGR_ALERTS_CHANNEL_ID = 'nudgr_alerts';
+export const NUDGR_SENT_CHANNEL_ID = 'nudgr_sent';
 // Android channel sound settings are immutable after first creation. The v2 id
 // ensures devices that previously created nudgr_calls with a bad sound get the
 // corrected ringtone configuration.
@@ -138,6 +139,19 @@ export async function setupNotificationChannels() {
         showBadge: true,
       });
 
+      // Channel 4: Sender confirmation channel when a Nudgr is triggered/sent
+      await Notifications.setNotificationChannelAsync(NUDGR_SENT_CHANNEL_ID, {
+        name: 'Nudgr Sent Confirmations',
+        description: 'Confirmations when your location Nudgr triggers and is sent to your connection',
+        importance: Notifications.AndroidImportance.HIGH,
+        vibrationPattern: [0, 250, 150, 250],
+        lightColor: '#6366F1',
+        lockscreenVisibility: Notifications.AndroidNotificationVisibility.PUBLIC,
+        sound: 'default',
+        enableVibrate: true,
+        showBadge: false,
+      });
+
       const channels = await Notifications.getNotificationChannelsAsync();
       const channelIds = channels.map((c) => c.id);
       console.log('[NOTIFICATION_DEBUG] Channels created and verified:', channelIds.join(', '));
@@ -239,6 +253,64 @@ export async function showGeofenceEnterNotification({ regionId, enteredAt = new 
     return id;
   } catch (error) {
     console.error(`[NUDGR_GEOFENCE_SELF_TEST] result=FAILED error=${error?.message || error}`);
+    return null;
+  }
+}
+
+/**
+ * Displays a sender-facing confirmation notification when a Nudgr is triggered and sent.
+ * Uses a deterministic identifier per triggerEventId so backend delivery status updates
+ * can cleanly replace/update it in place without spamming the sender.
+ *
+ * @param {object} params - { nudgeId, triggerEventId, recipientName, triggerLabel, title }
+ * @returns {Promise<string|null>} Notification identifier
+ */
+export async function showSenderNudgeTriggeredNotification({
+  nudgeId,
+  triggerEventId = '',
+  recipientName = 'your connection',
+  triggerLabel = '',
+  title: nudgeTitle = '',
+  statusText = '',
+}) {
+  if (!nudgeId) return null;
+  const targetName = recipientName || 'your connection';
+  const place = triggerLabel && triggerLabel !== 'My current location' ? ` at ${triggerLabel}` : '';
+  const heading = statusText
+    ? statusText
+    : nudgeTitle
+    ? `Nudgr sent: ${nudgeTitle}`
+    : `Nudgr sent to ${targetName}`;
+  const body = statusText
+    ? `Location alarm for ${targetName}${place}`
+    : `Triggered${place} · Ringing ${targetName}'s phone now`;
+
+  const identifier = triggerEventId ? `nudgr_sent_${triggerEventId}` : `nudgr_sent_${nudgeId}`;
+
+  try {
+    await setupNotificationChannels();
+    const id = await Notifications.scheduleNotificationAsync({
+      identifier,
+      content: {
+        title: heading,
+        body,
+        data: {
+          nudgeId,
+          triggerEventId,
+          type: 'nudge_sender_status',
+          isReceived: false,
+        },
+        sound: 'default',
+        priority: Notifications.AndroidNotificationPriority.HIGH,
+        color: '#6366F1',
+        channelId: NUDGR_SENT_CHANNEL_ID,
+      },
+      trigger: Platform.OS === 'android' ? { channelId: NUDGR_SENT_CHANNEL_ID } : null,
+    });
+    console.log(`[NUDGR_SENDER_NOTIFICATION] nudgeId=${nudgeId} triggerEventId=${triggerEventId} id=${id}`);
+    return id;
+  } catch (error) {
+    console.warn(`[NUDGR_SENDER_NOTIFICATION] failed: ${error?.message || error}`);
     return null;
   }
 }

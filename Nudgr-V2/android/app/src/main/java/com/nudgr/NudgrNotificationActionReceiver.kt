@@ -24,11 +24,15 @@ class NudgrNotificationActionReceiver : BroadcastReceiver() {
         val triggerId = intent.getStringExtra("triggerId")
             ?: intent.getStringExtra("triggerEventId")
             ?: ""
+        val incoming = NudgrIncomingState.get(context, nudgeId) ?: return
+        if (incoming.optString("triggerId") != triggerId) return
+        if (intent.getStringExtra("authNonce") != incoming.optString("intentNonce")) return
 
         Log.d(TAG, "[ACTION_RECEIVED] action=$action nudgeId=$nudgeId triggerId=$triggerId")
 
         // Commit before this receiver exits, even when React has never started.
-        val state = if (action == ACTION_ANSWER) "answered" else "declined"
+        val state = if (action == ACTION_ANSWER) "answered"
+            else if (incoming.optString("state") == "missed") "missed" else "declined"
         NudgrIncomingState.set(context, nudgeId, state)
 
         // 1. Cancel the native notification immediately

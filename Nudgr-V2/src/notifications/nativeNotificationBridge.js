@@ -1,22 +1,29 @@
 import { NativeModules, NativeEventEmitter, Platform } from 'react-native';
+import { getAuth } from '../firebase';
 
 const { NudgrNativeModule } = NativeModules;
 const eventEmitter = NudgrNativeModule ? new NativeEventEmitter(NudgrNativeModule) : null;
 
 // null means an older/non-Android build needs the existing Expo fallback.
-export async function showNativeIncomingNotification({ nudgeId, triggerId = '', senderName = 'Someone', message = 'Incoming Nudgr' }) {
+export async function showNativeIncomingNotification({ nudgeId, triggerId = '', senderName = 'Someone', message = 'Incoming Nudgr',
+  recipientUid = getAuth().currentUser?.uid || '', expiresAt = Date.now() + 300000 }) {
   if (Platform.OS !== 'android' || !NudgrNativeModule?.showIncomingNotification) return null;
-  return NudgrNativeModule.showIncomingNotification(nudgeId, triggerId, senderName, message);
+  return NudgrNativeModule.showIncomingNotification(nudgeId, triggerId, senderName, message, recipientUid, Number(expiresAt));
 }
+
+export const setNativeLockscreenAllowed = allowed => NudgrNativeModule?.setLockscreenAllowed?.(allowed);
+export const clearNativeAccountState = () => NudgrNativeModule?.clearAccountState?.();
+export const flushNativeReceipts = () => NudgrNativeModule?.flushReceipts?.();
 
 export async function getNativeIncomingState(nudgeId = null) {
   if (Platform.OS !== 'android' || !NudgrNativeModule?.getIncomingState) return null;
   return NudgrNativeModule.getIncomingState(nudgeId);
 }
 
-export async function recordNativeIncoming(nudgeId, triggerId = '', senderName = '') {
+export async function recordNativeIncoming(nudgeId, triggerId = '', senderName = '',
+  recipientUid = getAuth().currentUser?.uid || '', expiresAt = Date.now() + 300000) {
   if (Platform.OS !== 'android' || !NudgrNativeModule?.recordIncoming) return false;
-  return NudgrNativeModule.recordIncoming(nudgeId, triggerId, senderName);
+  return NudgrNativeModule.recordIncoming(nudgeId, triggerId, senderName, recipientUid, Number(expiresAt));
 }
 
 export async function setNativeIncomingState(nudgeId, state, senderName = '') {

@@ -1,0 +1,8 @@
+// Explicit test invocation only; this module is never included in production builds.
+gradle.settingsEvaluated { settings ->
+    def fixture = new File(settings.settingsDir, '../tools/location-fixture')
+    if (new File(fixture, 'build.gradle').isFile() && new File(settings.settingsDir, 'app/src/main/AndroidManifest.xml').isFile()) {
+        settings.include(':qa-location-fixture')
+        settings.project(':qa-location-fixture').projectDir = fixture
+    }
+}

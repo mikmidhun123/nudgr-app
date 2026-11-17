@@ -1,7 +1,8 @@
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { getNativeIncomingState, setNativeIncomingState } from './nativeNotificationBridge';
+import { getAuth, isQaBuild } from '../firebase';
 
-const INCOMING_STATE_KEY = '@nudgr_incoming_state';
+const INCOMING_STATE_KEY = isQaBuild ? '@nudgr_incoming_state_qa' : '@nudgr_incoming_state';
 const RINGING_TIMEOUT_MS = 30000;
 
 export const INCOMING_STATES = {
@@ -23,7 +24,7 @@ export async function getIncomingState(nudgeId = null) {
     const native = await getNativeIncomingState(nudgeId);
     const parsed = nudgeId ? (native || (local?.nudgeId === nudgeId ? local : null))
       : native && (!local || native.nudgeId === local.nudgeId || native.timestamp >= local.timestamp) ? native : local;
-    if (!parsed || (nudgeId && parsed.nudgeId !== nudgeId)) return null;
+    if (!parsed || parsed.recipientUid !== getAuth().currentUser?.uid || (nudgeId && parsed.nudgeId !== nudgeId)) return null;
     // Check if state is stale (> 30 seconds old for RINGING)
     if (parsed.state === INCOMING_STATES.RINGING) {
       const elapsed = Date.now() - parsed.timestamp;
@@ -49,6 +50,7 @@ export async function setIncomingState(nudgeId, state, senderName) {
   try {
     const payload = {
       nudgeId,
+      recipientUid: getAuth().currentUser?.uid || null,
       state,
       timestamp: Date.now(),
       senderName,

@@ -1,8 +1,9 @@
+import { persistSenderPlan, clearSenderPlan } from './scheduledSender';
+import { scheduleAllows, canTriggerByRepeatPolicy, REPEAT_MODE } from './geoUtils';
 import * as Location from 'expo-location';
 import {
   registerGeofencesForNudges,
-  stopGeofences,
-  clearPersistedSenderGeofences,
+  stopSenderGeofences,
   evaluateSenderNudges,
 } from './backgroundGeofence';
 import {
@@ -26,6 +27,29 @@ export function startTriggerEngine({ uid, onStatus }) {
   let sentNudges = [];
   let syncInProgress = false;
   let pendingSync = false;
+  let lastEligibilityKey = '';
+
+  const isStatusCandidate = (nudge) => {
+    const mode = nudge?.repeatMode || REPEAT_MODE.ONCE;
+    if (mode === REPEAT_MODE.ONCE) {
+      return nudge?.status === NUDGE_STATUS.ACTIVE || nudge?.status === NUDGE_STATUS.SCHEDULED;
+    }
+    return nudge?.status !== NUDGE_STATUS.CANCELLED;
+  };
+
+  const eligible = (nudge) =>
+    isStatusCandidate(nudge) &&
+    isNudgeActive(nudge) &&
+    scheduleAllows(nudge) &&
+    canTriggerByRepeatPolicy(nudge, new Date(), false);
+
+  const eligibilityKey = () =>
+    sentNudges
+      .filter(eligible)
+      .map((nudge) => nudge.id)
+      .sort()
+      .join('|');
+
   console.log(`[NUDGR_GEOFENCE_REGISTER] Starting sender geofence engine currentUserUid=${uid}`);
 
   const startForegroundWatcher = async (activeNudges) => {
@@ -37,11 +61,12 @@ export function startTriggerEngine({ uid, onStatus }) {
 
     try {
       const fgPerm = await Location.getForegroundPermissionsAsync();
-      if (fgPerm.status !== 'granted') return;
+      if (stopped || fgPerm.status !== 'granted') return;
 
-      fgWatcherSub = await Location.watchPositionAsync(
+      const watcher = await Location.watchPositionAsync(
         {
-          accuracy: Location.Accuracy.Balanced,
+          accuracy: Location.Accuracy.High,
+          mayShowUserSettingsDialog: false,
           timeInterval: 5000,
           distanceInterval: 10,
         },
@@ -51,6 +76,11 @@ export function startTriggerEngine({ uid, onStatus }) {
           await evaluateSenderNudges(loc.coords);
         }
       );
+      if (stopped) {
+        watcher.remove();
+        return;
+      }
+      fgWatcherSub = watcher;
       console.log('[GEOFENCE_DEBUG] Foreground position watcher active for real-time tracking');
     } catch (err) {
       console.warn('[GEOFENCE_DEBUG] Could not start foreground position watcher:', err.message);
@@ -60,14 +90,19 @@ export function startTriggerEngine({ uid, onStatus }) {
   const syncGeofences = async () => {
     if (stopped) return;
 
+    await persistSenderPlan(uid, sentNudges);
+    if (stopped) return;
+
     // Only the sender's device owns the physical geofence for a Nudgr.
     const allNudges = sentNudges.filter((n) => n?.id && n.senderUid === uid);
+    lastEligibilityKey = eligibilityKey();
 
-    // Filter for ACTIVE or SCHEDULED nudges that are currently enabled (isNudgeActive)
+    // Register geofences for any enabled Nudgr that is eligible or repeating (so EXIT transitions are tracked too)
     const activeNudges = allNudges.filter(
       (n) =>
-        (n.status === NUDGE_STATUS.ACTIVE || n.status === NUDGE_STATUS.SCHEDULED) &&
+        isStatusCandidate(n) &&
         isNudgeActive(n) &&
+        scheduleAllows(n) &&
         typeof n.triggerLatitude === 'number' &&
         typeof n.triggerLongitude === 'number' &&
         typeof n.radiusKm === 'number'
@@ -83,12 +118,12 @@ export function startTriggerEngine({ uid, onStatus }) {
         fgWatcherSub.remove();
         fgWatcherSub = null;
       }
-      await stopGeofences();
-      await clearPersistedSenderGeofences();
+      await stopSenderGeofences(uid);
       return;
     }
 
-    const result = await registerGeofencesForNudges(activeNudges);
+    const result = await registerGeofencesForNudges(activeNudges, () => !stopped);
+    if (stopped) return;
     if (result.success > 0) {
       console.log(`[NUDGR_GEOFENCE_REGISTER] currentUserUid=${uid} registered=${result.success}`);
       if (onStatus) onStatus('monitoring-geofence', result.success);
@@ -101,14 +136,13 @@ export function startTriggerEngine({ uid, onStatus }) {
     await startForegroundWatcher(activeNudges);
 
     // Immediately evaluate current position against active nudges
-    // (Essential for when user is already inside radius or stationary at creation)
     (async () => {
       try {
         let initialLoc = null;
         try {
-          initialLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+          initialLoc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High, mayShowUserSettingsDialog: false });
         } catch (_) {
-          initialLoc = await Location.getLastKnownPositionAsync();
+          initialLoc = await Location.getLastKnownPositionAsync({ maxAge: 60000, requiredAccuracy: 200 });
         }
         if (!stopped && initialLoc?.coords) {
           console.log(
@@ -150,7 +184,12 @@ export function startTriggerEngine({ uid, onStatus }) {
     (err) => console.warn('[triggerEngine] sent nudges subscription error:', err?.message)
   );
 
+  const clock = setInterval(() => {
+    if (!stopped && lastEligibilityKey !== eligibilityKey()) queueSync().catch(() => {});
+  }, 30000);
+
   return function stop() {
+    clearInterval(clock);
     stopped = true;
     console.log('[GEOFENCE_DEBUG] Stopping trigger engine');
     if (fgWatcherSub) {
@@ -158,7 +197,6 @@ export function startTriggerEngine({ uid, onStatus }) {
       fgWatcherSub = null;
     }
     if (unsubSent) unsubSent();
-    stopGeofences();
-    clearPersistedSenderGeofences();
+    return Promise.all([stopSenderGeofences(uid), clearSenderPlan(uid)]);
   };
 }

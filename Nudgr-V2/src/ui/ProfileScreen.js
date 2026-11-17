@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   StatusBar,
+  Platform,
 } from 'react-native';
 import {
   scheduleTestNotification,
@@ -18,6 +19,7 @@ import {
 } from '../notifications/localNotifications';
 import { getRuntimeStatuses } from '../diagnostics/runtimeStatus';
 import { getGeofenceDiagnostics } from '../location/debugStatus';
+import AmbientBackground from './AmbientBackground';
 import { THEME } from './theme';
 
 export default function ProfileScreen({ uid, email, displayName, onBack, onSignOut }) {
@@ -40,15 +42,15 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
       if (res.success) {
         const msg =
           seconds > 0
-            ? `✓ Scheduled for ${seconds}s from now! (ID: ${res.notificationId})\n👉 Lock your phone or leave app to test background delivery.`
-            : `✓ Instant notification delivered! (ID: ${res.notificationId})`;
+            ? `Scheduled for ${seconds}s from now! (ID: ${res.notificationId})\nLock your phone or leave app to test background delivery.`
+            : `Instant notification delivered! (ID: ${res.notificationId})`;
         setTestStatus({ message: msg, isError: false });
       } else {
-        setTestStatus({ message: `✗ Failed: ${res.error}`, isError: true });
+        setTestStatus({ message: `Failed: ${res.error}`, isError: true });
         Alert.alert('Notification Test Failed', res.error);
       }
     } catch (e) {
-      setTestStatus({ message: `✗ Error: ${e.message}`, isError: true });
+      setTestStatus({ message: `Error: ${e.message}`, isError: true });
     } finally {
       setTesting(false);
     }
@@ -60,15 +62,15 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
       const diag = await getNotificationDiagnostics();
       setDiagnostics(diag);
       const permText = diag.permissionGranted
-        ? '✓ Permissions: Granted'
-        : `✗ Permissions: ${diag.permissionStatus || 'Denied'}`;
+        ? 'Permissions: Granted'
+        : `Permissions: ${diag.permissionStatus || 'Denied'}`;
       const channelCount = diag.channels?.length || 0;
       setTestStatus({
         message: `${permText} | ${channelCount} Channels Registered (${diag.channels?.map((c) => c.id).join(', ')})`,
         isError: !diag.permissionGranted,
       });
     } catch (e) {
-      setTestStatus({ message: `✗ Diagnostic Error: ${e.message}`, isError: true });
+      setTestStatus({ message: `Diagnostic Error: ${e.message}`, isError: true });
     } finally {
       setTesting(false);
     }
@@ -83,7 +85,7 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
       ]);
       setTriggerTrace({ geofence, entries: entries.slice(0, 6) });
     } catch (e) {
-      setTestStatus({ message: `✗ Trigger trace error: ${e.message}`, isError: true });
+      setTestStatus({ message: `Trigger trace error: ${e.message}`, isError: true });
     } finally {
       setTesting(false);
     }
@@ -97,17 +99,17 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
       if (res.success) {
         setActiveAlarm({ id: res.nudgeId, notificationId: res.notificationId, targetTime: res.targetTime });
         const msg =
-          `✓ Nudgr Time Trigger Scheduled!\n` +
-          `• Target Time: ${res.targetTime} (+${seconds}s)\n` +
-          `• OS Alarm Registered: ${res.matchingFound ? 'YES' : 'NO'}\n\n` +
-          `👉 Lock your phone now and wait for notification!`;
+          `Nudgr Time Trigger Scheduled!\n` +
+          `Target Time: ${res.targetTime} (+${seconds}s)\n` +
+          `OS Alarm Registered: ${res.matchingFound ? 'YES' : 'NO'}\n\n` +
+          `Lock your phone now and wait for notification!`;
         setTimeTestStatus({ message: msg, isError: false });
       } else {
-        setTimeTestStatus({ message: `✗ Scheduling failed: ${res.error}`, isError: true });
+        setTimeTestStatus({ message: `Scheduling failed: ${res.error}`, isError: true });
         Alert.alert('Time Trigger Failed', res.error);
       }
     } catch (e) {
-      setTimeTestStatus({ message: `✗ Error: ${e.message}`, isError: true });
+      setTimeTestStatus({ message: `Error: ${e.message}`, isError: true });
     } finally {
       setTimeTesting(false);
     }
@@ -120,19 +122,19 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
       if (res.matchingFound) {
         const item = res.items[0];
         const msg =
-          `✓ OS Alarm Verified Active in OS!\n` +
-          `• Alarm ID: ${item?.id}\n` +
-          `• Total Alarms in OS: ${res.total}`;
+          `OS Alarm Verified Active!\n` +
+          `Alarm ID: ${item?.id}\n` +
+          `Total Alarms in OS: ${res.total}`;
         setTimeTestStatus({ message: msg, isError: false });
       } else {
         const msg =
           res.total > 0
-            ? `⚠️ ${res.total} alarm(s) in OS, but none matched current test.`
-            : '⚠️ No scheduled alarms currently registered in OS.';
+            ? `${res.total} alarm(s) in OS, but none matched current test.`
+            : 'No scheduled alarms currently registered in OS.';
         setTimeTestStatus({ message: msg, isError: true });
       }
     } catch (e) {
-      setTimeTestStatus({ message: `✗ Verification error: ${e.message}`, isError: true });
+      setTimeTestStatus({ message: `Verification error: ${e.message}`, isError: true });
     } finally {
       setTimeTesting(false);
     }
@@ -143,9 +145,9 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
     try {
       await cancelNudgeAlarm(activeAlarm.id);
       setActiveAlarm(null);
-      setTimeTestStatus({ message: '✓ Scheduled alarm cancelled successfully.', isError: false });
+      setTimeTestStatus({ message: 'Scheduled alarm cancelled successfully.', isError: false });
     } catch (e) {
-      setTimeTestStatus({ message: `✗ Error cancelling alarm: ${e.message}`, isError: true });
+      setTimeTestStatus({ message: `Error cancelling alarm: ${e.message}`, isError: true });
     }
   };
 
@@ -158,20 +160,21 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
 
   return (
     <View style={styles.screen}>
-      <StatusBar barStyle="light-content" backgroundColor={THEME.colors.bg} />
+      <AmbientBackground />
+      <StatusBar barStyle="dark-content" backgroundColor={THEME.colors.bg} />
 
-      {/* Header */}
+      {/* ── Header ── */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={onBack}
           style={styles.backBtn}
           activeOpacity={0.7}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           <Text style={styles.backArrow}>‹</Text>
         </TouchableOpacity>
         <View style={styles.headerTitleContainer} pointerEvents="none">
-          <Text style={styles.headerTitle}>Account & Profile</Text>
+          <Text style={styles.headerTitle}>Profile & Account</Text>
         </View>
         <View style={{ width: 44 }} />
       </View>
@@ -180,65 +183,85 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
         contentContainerStyle={styles.scrollContainer}
         showsVerticalScrollIndicator={false}
       >
-        {/* Large Profile Hero Glass Card */}
-        <View style={styles.profileHeroCard}>
-          <View style={styles.avatarCircle}>
-            <Text style={styles.avatarInitials}>{initials}</Text>
+        {/* ── Profile Hero Card ── */}
+        <View style={styles.profileCard}>
+          <View style={styles.profileGlowOrb} pointerEvents="none" />
+          <View style={styles.avatarContainer}>
+            <View style={styles.avatarCircle}>
+              <Text style={styles.avatarInitials}>{initials}</Text>
+            </View>
           </View>
           <Text style={styles.profileName}>{displayName || 'Nudgr User'}</Text>
           <Text style={styles.profileEmail}>{email || 'No email associated'}</Text>
           <View style={styles.uidBadge}>
-            <Text style={styles.uidText}>UID: {uid?.slice(0, 10)}…</Text>
+            <Text style={styles.uidText}>ID: {uid?.slice(0, 10)}…</Text>
           </View>
         </View>
 
-        {/* Grouped Settings Glass Rows */}
-        <Text style={styles.sectionHeader}>SETTINGS</Text>
-        <View style={styles.groupedRowsCard}>
+        {/* ── Settings Section ── */}
+        <View style={styles.sectionRow}>
+          <View style={styles.sectionLine} />
+          <Text style={styles.sectionHeader}>SETTINGS</Text>
+          <View style={styles.sectionLine} />
+        </View>
+
+        <View style={styles.groupedCard}>
           <TouchableOpacity
             style={styles.rowItem}
             onPress={runDiagnosticsCheck}
-            activeOpacity={0.75}
+            activeOpacity={0.72}
           >
-            <View style={[styles.rowIconBox, { backgroundColor: 'rgba(90, 200, 250, 0.14)' }]}>
-              <Text style={styles.rowIcon}>🔔</Text>
+            <View style={[styles.rowIconBox, { backgroundColor: THEME.colors.tagTeal, borderColor: THEME.colors.tagTealBorder }]}>
+              <Text style={styles.rowIconGlyph}>◈</Text>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>Notifications</Text>
               <Text style={styles.rowSubtitle}>Check channel & post permissions</Text>
             </View>
-            <Text style={styles.chevron}>›</Text>
+            <Text style={styles.rowChevron}>›</Text>
           </TouchableOpacity>
 
           <View style={styles.rowDivider} />
 
           <View style={styles.rowItem}>
-            <View style={[styles.rowIconBox, { backgroundColor: 'rgba(48, 209, 88, 0.14)' }]}>
-              <Text style={styles.rowIcon}>📍</Text>
+            <View style={[styles.rowIconBox, { backgroundColor: THEME.colors.successBg, borderColor: THEME.colors.successBorder }]}>
+              <Text style={styles.rowIconGlyph}>◎</Text>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.rowTitle}>Geofence Engine</Text>
               <Text style={styles.rowSubtitle}>Background arrival monitor active</Text>
             </View>
-            <View style={styles.statusActivePill}>
-              <Text style={styles.statusActiveText}>ACTIVE</Text>
+            <View style={styles.activePill}>
+              <Text style={styles.activePillText}>ACTIVE</Text>
             </View>
           </View>
         </View>
 
-        {/* Sign Out Glass Button */}
+        {/* ── Sign Out ── */}
         <TouchableOpacity style={styles.signOutBtn} onPress={onSignOut} activeOpacity={0.8}>
           <Text style={styles.signOutText}>Sign Out of Nudgr</Text>
         </TouchableOpacity>
 
-        {/* Developer Diagnostics Glass Panel */}
-        <Text style={styles.sectionHeader}>DEVELOPER & DIAGNOSTICS</Text>
+        {/* ── Developer Section ── */}
+        <View style={styles.sectionRow}>
+          <View style={styles.sectionLine} />
+          <Text style={styles.sectionHeader}>DEVELOPER</Text>
+          <View style={styles.sectionLine} />
+        </View>
 
-        <View style={styles.devGlassCard}>
-          <Text style={styles.devCardTitle}>🔔 Notification Shade Verification</Text>
-          <Text style={styles.devCardSubtitle}>
-            Tests immediate local and 10s background notification delivery to verify system push readiness.
-          </Text>
+        {/* Notification Test Card */}
+        <View style={styles.devCard}>
+          <View style={styles.devCardTitleRow}>
+            <View style={styles.devCardIcon}>
+              <Text style={styles.devCardIconGlyph}>◈</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.devCardTitle}>Notification Shade Verification</Text>
+              <Text style={styles.devCardSubtitle}>
+                Tests immediate local and 10s background notification delivery.
+              </Text>
+            </View>
+          </View>
 
           <TouchableOpacity
             style={styles.devPrimaryBtn}
@@ -246,7 +269,7 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
             disabled={testing}
             activeOpacity={0.8}
           >
-            <Text style={styles.devPrimaryBtnText}>⚡ TEST 10S BACKGROUND ALERT</Text>
+            <Text style={styles.devPrimaryBtnText}>TEST 10S BACKGROUND ALERT</Text>
           </TouchableOpacity>
 
           <View style={styles.devBtnRow}>
@@ -274,19 +297,27 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
           )}
 
           {testStatus && (
-            <View style={[styles.statusBox, testStatus.isError ? styles.statusError : styles.statusSuccess]}>
-              <Text style={[styles.statusBoxText, testStatus.isError ? styles.textError : styles.textSuccess]}>
+            <View style={[styles.statusBox, testStatus.isError ? styles.statusBoxError : styles.statusBoxSuccess]}>
+              <Text style={[styles.statusBoxText, testStatus.isError ? styles.statusTextError : styles.statusTextSuccess]}>
                 {testStatus.message}
               </Text>
             </View>
           )}
         </View>
 
-        <View style={styles.devGlassCard}>
-          <Text style={styles.devCardTitle}>📍 Geofence → Delivery Trace</Text>
-          <Text style={styles.devCardSubtitle}>
-            Shows Android geofence registration and the latest durable background stages after reopening the app.
-          </Text>
+        {/* Geofence Trace Card */}
+        <View style={styles.devCard}>
+          <View style={styles.devCardTitleRow}>
+            <View style={styles.devCardIcon}>
+              <Text style={styles.devCardIconGlyph}>◎</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.devCardTitle}>Geofence Delivery Trace</Text>
+              <Text style={styles.devCardSubtitle}>
+                Shows Android geofence registration and latest background delivery stages.
+              </Text>
+            </View>
+          </View>
           <TouchableOpacity
             style={styles.devPrimaryBtn}
             onPress={inspectTriggerTrace}
@@ -309,11 +340,18 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
         </View>
 
         {/* Time Trigger Test Card */}
-        <View style={styles.devGlassCard}>
-          <Text style={styles.devCardTitle}>⏱️ Pure Time Alarm Verification</Text>
-          <Text style={styles.devCardSubtitle}>
-            Pure OS AlarmManager test. Zero dependency on GPS, peer connection, or Cloud Functions.
-          </Text>
+        <View style={styles.devCard}>
+          <View style={styles.devCardTitleRow}>
+            <View style={styles.devCardIcon}>
+              <Text style={styles.devCardIconGlyph}>◷</Text>
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.devCardTitle}>Pure Time Alarm Verification</Text>
+              <Text style={styles.devCardSubtitle}>
+                Pure OS AlarmManager test. Zero dependency on GPS, peer connection, or Cloud Functions.
+              </Text>
+            </View>
+          </View>
 
           <View style={styles.devBtnRow}>
             <TouchableOpacity
@@ -336,12 +374,12 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
 
             {activeAlarm && (
               <TouchableOpacity
-                style={[styles.devSecondaryBtn, { borderColor: THEME.colors.danger }]}
+                style={[styles.devSecondaryBtn, { borderColor: THEME.colors.dangerBorder, backgroundColor: THEME.colors.dangerBg }]}
                 onPress={cancelActiveAlarm}
                 disabled={timeTesting}
                 activeOpacity={0.8}
               >
-                <Text style={{ color: THEME.colors.danger, fontWeight: '700', fontSize: 12 }}>Cancel</Text>
+                <Text style={[styles.devSecondaryBtnText, { color: THEME.colors.dangerText }]}>Cancel</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -351,8 +389,8 @@ export default function ProfileScreen({ uid, email, displayName, onBack, onSignO
           )}
 
           {timeTestStatus && (
-            <View style={[styles.statusBox, timeTestStatus.isError ? styles.statusError : styles.statusSuccess]}>
-              <Text style={[styles.statusBoxText, timeTestStatus.isError ? styles.textError : styles.textSuccess]}>
+            <View style={[styles.statusBox, timeTestStatus.isError ? styles.statusBoxError : styles.statusBoxSuccess]}>
+              <Text style={[styles.statusBoxText, timeTestStatus.isError ? styles.statusTextError : styles.statusTextSuccess]}>
                 {timeTestStatus.message}
               </Text>
             </View>
@@ -370,16 +408,17 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: THEME.colors.bg,
   },
+
+  // ── Header ───────────────────────────────────────────────────────────────
   header: {
-    height: 54,
+    height: 60,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    backgroundColor: 'rgba(7, 10, 18, 0.85)',
-    borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.glassBorderSubtle,
-    zIndex: 10,
+    paddingHorizontal: 16,
+    backgroundColor: 'transparent',
+    zIndex: 20,
+    marginBottom: 4,
   },
   headerTitleContainer: {
     ...StyleSheet.absoluteFillObject,
@@ -398,97 +437,116 @@ const styles = StyleSheet.create({
     justifyContent: 'center',
     alignItems: 'center',
     borderRadius: 14,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: THEME.colors.glassBorderSubtle,
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+    elevation: 2,
+    zIndex: 25,
   },
   backArrow: {
-    fontSize: 28,
-    color: THEME.colors.accentPrimary,
+    fontSize: 26,
+    color: THEME.colors.textPrimary,
     fontWeight: '300',
-    lineHeight: 30,
+    lineHeight: 28,
   },
   scrollContainer: {
     paddingHorizontal: 20,
-    paddingTop: 20,
+    paddingTop: 16,
     paddingBottom: 40,
   },
 
-  // --- Profile Hero Card ---
-  profileHeroCard: {
-    backgroundColor: THEME.colors.bgCard,
-    borderWidth: 1,
-    borderColor: THEME.colors.glassBorder,
-    borderRadius: THEME.radius.cardLg,
-    padding: 24,
+  // ── Profile Hero Card ─────────────────────────────────────────────────────
+  profileCard: {
+    ...THEME.glassCardHero,
+    padding: 26,
     alignItems: 'center',
     marginBottom: 24,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.35,
-    shadowRadius: 16,
-    elevation: 4,
+    overflow: 'hidden',
+  },
+  profileGlowOrb: {
+    position: 'absolute',
+    top: -40,
+    left: -40,
+    width: 180,
+    height: 180,
+    borderRadius: 90,
+    backgroundColor: 'rgba(99, 102, 241, 0.06)',
+  },
+  avatarContainer: {
+    marginBottom: 14,
   },
   avatarCircle: {
     width: 80,
     height: 80,
-    borderRadius: 40,
-    backgroundColor: 'rgba(139, 124, 255, 0.18)',
-    borderWidth: 2,
-    borderColor: THEME.colors.accentPrimary,
+    borderRadius: 26,
+    backgroundColor: THEME.colors.accentPrimary,
     alignItems: 'center',
     justifyContent: 'center',
-    marginBottom: 14,
     shadowColor: THEME.colors.accentPrimary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.35,
-    shadowRadius: 10,
+    shadowRadius: 12,
     elevation: 6,
   },
   avatarInitials: {
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: '800',
     color: '#ffffff',
-    letterSpacing: 1,
+    letterSpacing: 0.5,
   },
   profileName: {
     fontSize: 22,
     fontWeight: '800',
     color: THEME.colors.textPrimary,
-    letterSpacing: -0.3,
+    letterSpacing: -0.4,
     marginBottom: 4,
   },
   profileEmail: {
     fontSize: 14,
     color: THEME.colors.textSecondary,
-    marginBottom: 12,
+    marginBottom: 14,
   },
   uidBadge: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: THEME.colors.bgSubtle,
     paddingHorizontal: 12,
-    paddingVertical: 4,
-    borderRadius: 10,
+    paddingVertical: 5,
+    borderRadius: THEME.radius.xs,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: THEME.colors.glassBorderSubtle,
   },
   uidText: {
     fontSize: 11,
-    color: THEME.colors.textTertiary,
+    color: THEME.colors.textSecondary,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    letterSpacing: 0.5,
   },
 
-  // --- Grouped Rows Card ---
+  // ── Section Divider ───────────────────────────────────────────────────────
+  sectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 14,
+  },
+  sectionLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: THEME.colors.glassBorderSubtle,
+  },
   sectionHeader: {
     fontSize: 11,
     fontWeight: '800',
     color: THEME.colors.textTertiary,
-    letterSpacing: 1.2,
-    marginBottom: 10,
-    marginLeft: 4,
+    letterSpacing: 1.5,
   },
-  groupedRowsCard: {
-    backgroundColor: THEME.colors.bgCard,
-    borderWidth: 1,
-    borderColor: THEME.colors.glassBorder,
-    borderRadius: THEME.radius.card,
+
+  // ── Grouped Card ─────────────────────────────────────────────────────────
+  groupedCard: {
+    ...THEME.glassCard,
     paddingVertical: 4,
     marginBottom: 20,
   },
@@ -500,14 +558,16 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   rowIconBox: {
-    width: 36,
-    height: 36,
-    borderRadius: 11,
+    width: 38,
+    height: 38,
+    borderRadius: 12,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  rowIcon: {
-    fontSize: 18,
+  rowIconGlyph: {
+    fontSize: 16,
+    color: '#ffffff',
+    fontWeight: '700',
   },
   rowTitle: {
     fontSize: 15,
@@ -519,85 +579,88 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: THEME.colors.textSecondary,
   },
-  chevron: {
+  rowChevron: {
     fontSize: 20,
     color: THEME.colors.textTertiary,
     fontWeight: '300',
-  },
-  statusActivePill: {
-    backgroundColor: 'rgba(48, 209, 88, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(48, 209, 88, 0.3)',
-    borderRadius: 8,
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-  },
-  statusActiveText: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: '#86efac',
-    letterSpacing: 0.8,
   },
   rowDivider: {
     height: 1,
     backgroundColor: THEME.colors.glassBorderSubtle,
     marginHorizontal: 16,
   },
+  activePill: {
+    backgroundColor: THEME.colors.mintBg,
+    borderRadius: THEME.radius.xs,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  activePillText: {
+    fontSize: 10,
+    fontWeight: '800',
+    color: THEME.colors.mint,
+    letterSpacing: 0.8,
+  },
 
-  // --- Sign Out Button ---
+  // ── Sign Out ──────────────────────────────────────────────────────────────
   signOutBtn: {
-    backgroundColor: 'rgba(255, 69, 58, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 69, 58, 0.30)',
-    borderRadius: THEME.radius.button,
-    paddingVertical: 15,
-    alignItems: 'center',
-    marginBottom: 26,
+    ...THEME.buttonDanger,
+    marginBottom: 28,
   },
   signOutText: {
-    color: '#fca5a5',
+    color: THEME.colors.dangerText,
     fontSize: 15,
     fontWeight: '700',
-    letterSpacing: -0.2,
   },
 
-  // --- Developer Glass Card ---
-  devGlassCard: {
-    backgroundColor: THEME.colors.bgCard,
-    borderWidth: 1,
-    borderColor: THEME.colors.glassBorder,
-    borderRadius: THEME.radius.card,
+  // ── Dev Card ──────────────────────────────────────────────────────────────
+  devCard: {
+    ...THEME.glassCard,
     padding: 18,
     marginBottom: 16,
+  },
+  devCardTitleRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    marginBottom: 16,
+  },
+  devCardIcon: {
+    width: 38,
+    height: 38,
+    borderRadius: 12,
+    backgroundColor: THEME.colors.lavenderBg,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 1,
+  },
+  devCardIconGlyph: {
+    fontSize: 16,
+    color: THEME.colors.accentPrimary,
+    fontWeight: '700',
   },
   devCardTitle: {
     fontSize: 15,
     fontWeight: '700',
     color: THEME.colors.textPrimary,
-    marginBottom: 4,
+    marginBottom: 3,
+    letterSpacing: -0.2,
   },
   devCardSubtitle: {
     fontSize: 12,
     color: THEME.colors.textSecondary,
     lineHeight: 17,
-    marginBottom: 14,
   },
   devPrimaryBtn: {
-    backgroundColor: THEME.colors.accentPrimary,
-    borderRadius: 14,
+    ...THEME.buttonPrimary,
     paddingVertical: 12,
-    alignItems: 'center',
+    borderRadius: THEME.radius.sm,
     marginBottom: 10,
-    shadowColor: THEME.colors.accentPrimary,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
-    elevation: 3,
   },
   devPrimaryBtnText: {
     color: '#ffffff',
     fontSize: 13,
-    fontWeight: '800',
+    fontWeight: '700',
     letterSpacing: 0.5,
   },
   devBtnRow: {
@@ -606,10 +669,10 @@ const styles = StyleSheet.create({
   },
   devSecondaryBtn: {
     flex: 1,
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    backgroundColor: THEME.colors.bgSubtle,
     borderWidth: 1,
-    borderColor: THEME.colors.glassBorder,
-    borderRadius: 12,
+    borderColor: THEME.colors.glassBorderSubtle,
+    borderRadius: THEME.radius.xs,
     paddingVertical: 10,
     alignItems: 'center',
     justifyContent: 'center',
@@ -622,28 +685,30 @@ const styles = StyleSheet.create({
   statusBox: {
     marginTop: 12,
     padding: 12,
-    borderRadius: 12,
-  },
-  statusSuccess: {
-    backgroundColor: 'rgba(48, 209, 88, 0.12)',
+    borderRadius: THEME.radius.xs,
     borderWidth: 1,
-    borderColor: 'rgba(48, 209, 88, 0.25)',
+    borderColor: THEME.colors.glassBorderSubtle,
+    backgroundColor: THEME.colors.bgSubtle,
   },
-  statusError: {
-    backgroundColor: 'rgba(255, 69, 58, 0.12)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 69, 58, 0.25)',
+  statusBoxSuccess: {
+    backgroundColor: THEME.colors.mintBg,
+    borderColor: 'rgba(16, 185, 129, 0.25)',
+  },
+  statusBoxError: {
+    backgroundColor: THEME.colors.dangerBg,
+    borderColor: THEME.colors.dangerBorder,
   },
   statusBoxText: {
     fontSize: 12,
-    lineHeight: 17,
+    lineHeight: 18,
+    color: THEME.colors.textSecondary,
   },
-  textSuccess: {
-    color: '#86efac',
+  statusTextSuccess: {
+    color: THEME.colors.mint,
     fontWeight: '600',
   },
-  textError: {
-    color: '#fca5a5',
+  statusTextError: {
+    color: THEME.colors.dangerText,
     fontWeight: '600',
   },
 });

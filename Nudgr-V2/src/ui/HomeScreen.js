@@ -6,8 +6,11 @@ import {
   TouchableOpacity,
   ScrollView,
   StatusBar,
+  Platform,
 } from 'react-native';
 import SideMenu, { HamburgerButton } from './SideMenu';
+import AmbientBackground from './AmbientBackground';
+import PermissionNotice from './PermissionNotice';
 import { THEME } from './theme';
 
 export default function HomeScreen({
@@ -24,6 +27,8 @@ export default function HomeScreen({
   const navigate = (screen) => {
     if (screen === 'profile') onOpenProfile();
     else if (screen === 'myconnection') onOpenMyConnection();
+    else if (screen === 'create') onCreate();
+    else if (screen === 'list') onOpenList();
   };
 
   // Determine time-appropriate greeting
@@ -34,17 +39,26 @@ export default function HomeScreen({
     return 'Good evening';
   };
 
-  const firstName = displayName?.split(' ')[0] || 'there';
+  const formattedName = displayName
+    ? (displayName.split(' ')[0] || 'there').toUpperCase()
+    : 'THERE';
+  const isConnected = connections.length > 0;
+  const connectionCountText = isConnected
+    ? `${connections.length} active connection${connections.length > 1 ? 's' : ''}`
+    : 'Ready to connect';
 
   return (
     <View style={styles.screen}>
-      <StatusBar barStyle="light-content" backgroundColor={THEME.colors.bg} />
+      <StatusBar barStyle="dark-content" backgroundColor="#F6F7FC" />
 
-      {/* Floating Translucent Header */}
+      {/* ── Soft Ambient Pastel Background ── */}
+      <AmbientBackground />
+
+      {/* ── Header ── */}
       <View style={styles.header}>
-        <View style={styles.headerTitleContainer} pointerEvents="none">
-          <Text style={styles.headerTitle}>
-            Nudgr<Text style={styles.headerDot}>.</Text>
+        <View style={styles.logoRow}>
+          <Text style={styles.logoText}>
+            Nudgr<Text style={styles.logoDot}>.</Text>
           </Text>
         </View>
         <HamburgerButton
@@ -53,97 +67,127 @@ export default function HomeScreen({
         />
       </View>
 
-      {/* Main Content */}
+      {/* ── Main Content ── */}
       <ScrollView
         contentContainerStyle={styles.scrollContainer}
         showsVerticalScrollIndicator={false}
       >
-        {/* Dynamic iPhone-style Greeting Header */}
+        {/* ── Greeting Section ── */}
         <View style={styles.greetingSection}>
           <Text style={styles.greetingPretitle}>{getGreeting()},</Text>
-          <Text style={styles.greetingTitle}>{firstName}</Text>
-          <View style={styles.connectionPill}>
-            <View style={styles.connectionPillDot} />
-            <Text style={styles.connectionPillText}>
-              {connections.length === 0
-                ? 'Ready to connect'
-                : `${connections.length} active connection${connections.length > 1 ? 's' : ''}`}
+          <Text style={styles.greetingTitle}>{formattedName}</Text>
+
+          <View style={[styles.statusPill, !isConnected && styles.statusPillInactive]}>
+            <View style={[styles.statusDot, !isConnected && styles.statusDotInactive]} />
+            <Text style={[styles.statusPillText, !isConnected && styles.statusPillTextInactive]}>
+              {connectionCountText}
             </Text>
           </View>
         </View>
 
-        {/* Quick Create Nudgr — Primary Floating Hero Glass Card */}
+        {/* ── Hero Create Card ── */}
+        <PermissionNotice />
         <TouchableOpacity
           style={styles.heroCard}
           onPress={onCreate}
           activeOpacity={0.88}
         >
-          {/* Subtle soft ambient glow inside card */}
-          <View style={styles.heroGlow} pointerEvents="none" />
+          {/* Subtle soft lavender glow wash on the right edge */}
+          <View style={styles.heroLavenderWash} pointerEvents="none" />
 
           <View style={styles.heroContent}>
+            {/* Violet rounded-square container with plus icon */}
             <View style={styles.heroIconBox}>
-              <Text style={styles.heroPlusIcon}>＋</Text>
+              <Text style={styles.heroPlusSymbol}>+</Text>
             </View>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.heroTag}>QUICK ACTION</Text>
+
+            {/* Title & Subtitle */}
+            <View style={styles.heroTextContainer}>
               <Text style={styles.heroTitle}>Create a Nudgr</Text>
-              <Text style={styles.heroSubtitle}>
+              <Text style={styles.heroDescription}>
                 Send a reminder that arrives at the right place.
               </Text>
             </View>
-            <Text style={styles.heroChevron}>›</Text>
+
+            {/* Circular Chevron */}
+            <View style={styles.heroChevronBox}>
+              <Text style={styles.heroChevron}>›</Text>
+            </View>
           </View>
         </TouchableOpacity>
 
-        {/* Section Heading */}
-        <Text style={styles.sectionHeader}>DASHBOARD</Text>
+        {/* ── Dashboard Section Divider ── */}
+        <View style={styles.sectionRow}>
+          <View style={styles.sectionLine} />
+          <Text style={styles.sectionHeader}>DASHBOARD</Text>
+          <View style={styles.sectionLine} />
+        </View>
 
-        {/* My Nudgrs Floating Glass Card */}
+        {/* ── My Nudgrs Card ── */}
         <TouchableOpacity
-          style={styles.glassCard}
+          style={styles.dashCard}
           onPress={onOpenList}
-          activeOpacity={0.82}
+          activeOpacity={0.85}
         >
-          <View style={[styles.cardIconBox, { backgroundColor: 'rgba(90, 200, 250, 0.12)' }]}>
-            <Text style={styles.cardEmoji}>📋</Text>
+          {/* Subtle soft mint wash on right */}
+          <View style={styles.dashMintWash} pointerEvents="none" />
+
+          {/* Mint rounded-square container with clean horizontal lines */}
+          <View style={styles.dashIconBoxMint}>
+            <View style={styles.mintListIcon}>
+              <View style={styles.mintListLine} />
+              <View style={styles.mintListLine} />
+              <View style={styles.mintListLine} />
+            </View>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.cardTitle}>My Nudgrs</Text>
-            <Text style={styles.cardSubtitle}>View active, sent & received reminders</Text>
+
+          <View style={styles.dashTextContainer}>
+            <Text style={styles.dashCardTitle}>My Nudgrs</Text>
+            <Text style={styles.dashCardSubtitle}>Active, sent & received reminders</Text>
           </View>
-          <Text style={styles.chevron}>›</Text>
+
+          <View style={styles.dashChevronBox}>
+            <Text style={styles.dashChevron}>›</Text>
+          </View>
         </TouchableOpacity>
 
-        {/* Connections Floating Glass Card */}
+        {/* ── My Connection Card ── */}
         <TouchableOpacity
-          style={styles.glassCard}
+          style={styles.dashCard}
           onPress={onOpenMyConnection}
-          activeOpacity={0.82}
+          activeOpacity={0.85}
         >
-          <View style={[styles.cardIconBox, { backgroundColor: 'rgba(139, 124, 255, 0.12)' }]}>
-            <Text style={styles.cardEmoji}>🔗</Text>
+          {/* Subtle soft lavender wash on right */}
+          <View style={styles.dashLavenderWash} pointerEvents="none" />
+
+          {/* Lavender rounded-square container with people icon */}
+          <View style={styles.dashIconBoxLavender}>
+            <Text style={styles.peopleIconGlyph}>👥</Text>
           </View>
-          <View style={{ flex: 1 }}>
-            <Text style={styles.cardTitle}>My Connection</Text>
-            <Text style={styles.cardSubtitle}>
-              {connections.length === 0
-                ? 'Pair with friends or family'
-                : `${connections.length} person${connections.length > 1 ? 's' : ''} connected`}
+
+          <View style={styles.dashTextContainer}>
+            <Text style={styles.dashCardTitle}>My Connection</Text>
+            <Text style={styles.dashCardSubtitle}>
+              {isConnected
+                ? `${connections.length} person${connections.length > 1 ? 's' : ''} connected`
+                : 'Pair with friends or family'}
             </Text>
           </View>
-          <Text style={styles.chevron}>›</Text>
+
+          <View style={styles.dashChevronBox}>
+            <Text style={styles.dashChevron}>›</Text>
+          </View>
         </TouchableOpacity>
 
-        {/* Empty-state Hint when no connections */}
-        {connections.length === 0 && (
-          <View style={styles.hintGlassCard}>
+        {/* ── Empty-state Hint ── */}
+        {!isConnected && (
+          <View style={styles.hintCard}>
             <View style={styles.hintIconBox}>
-              <Text style={styles.hintIcon}>💡</Text>
+              <Text style={styles.hintIconGlyph}>💡</Text>
             </View>
             <View style={{ flex: 1 }}>
               <Text style={styles.hintTitle}>Get Connected</Text>
-              <Text style={styles.hintText}>
+              <Text style={styles.hintBody}>
                 Share your connection code so others can send you arrival Nudgrs.{' '}
                 <Text style={styles.hintLink} onPress={onOpenMyConnection}>
                   Open My Connection
@@ -155,7 +199,7 @@ export default function HomeScreen({
         )}
       </ScrollView>
 
-      {/* Side Menu Drawer */}
+      {/* ── Side Menu Drawer ── */}
       <SideMenu
         isOpen={menuOpen}
         onClose={() => setMenuOpen(false)}
@@ -168,103 +212,117 @@ export default function HomeScreen({
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: THEME.colors.bg,
+    backgroundColor: '#F6F7FC',
   },
+
+  // ── Header ───────────────────────────────────────────────────────────────
   header: {
-    height: 56,
+    paddingTop: 12,
+    paddingBottom: 14,
+    paddingHorizontal: 24,
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'flex-end',
-    paddingHorizontal: 16,
-    backgroundColor: 'rgba(7, 10, 18, 0.85)',
-    borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.glassBorderSubtle,
+    justifyContent: 'space-between',
     zIndex: 10,
   },
-  headerTitleContainer: {
-    ...StyleSheet.absoluteFillObject,
-    justifyContent: 'center',
+  logoRow: {
+    flexDirection: 'row',
     alignItems: 'center',
   },
-  headerTitle: {
-    fontSize: 20,
+  logoText: {
+    fontSize: 26,
     fontWeight: '800',
-    color: THEME.colors.textPrimary,
-    letterSpacing: -0.5,
+    color: '#0F172A',
+    letterSpacing: -0.6,
   },
-  headerDot: {
-    color: THEME.colors.accentPrimary,
+  logoDot: {
+    color: '#6366F1',
+    fontWeight: '900',
   },
+
+  // ── Scroll Container ──────────────────────────────────────────────────────
   scrollContainer: {
-    paddingHorizontal: 20,
-    paddingTop: 24,
-    paddingBottom: 48,
+    paddingHorizontal: 22,
+    paddingTop: 16,
+    paddingBottom: 60,
   },
+
+  // ── Greeting ─────────────────────────────────────────────────────────────
   greetingSection: {
-    marginBottom: 28,
+    marginBottom: 24,
+    paddingTop: 8,
   },
   greetingPretitle: {
     fontSize: 16,
-    color: THEME.colors.textSecondary,
+    color: '#64748B',
     fontWeight: '500',
     letterSpacing: -0.2,
+    marginBottom: 4,
   },
   greetingTitle: {
     fontSize: 34,
     fontWeight: '800',
-    color: THEME.colors.textPrimary,
-    letterSpacing: -0.8,
-    marginTop: 2,
-    marginBottom: 10,
+    color: '#0F172A',
+    letterSpacing: 0.2,
+    marginBottom: 12,
   },
-  connectionPill: {
+  statusPill: {
     flexDirection: 'row',
     alignItems: 'center',
     alignSelf: 'flex-start',
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    backgroundColor: '#ECFDF5',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.09)',
-    borderRadius: THEME.radius.pill,
-    paddingHorizontal: 12,
-    paddingVertical: 5,
-    gap: 7,
+    borderColor: 'rgba(167, 243, 208, 0.85)',
+    borderRadius: 20,
+    paddingHorizontal: 13,
+    paddingVertical: 6,
   },
-  connectionPillDot: {
-    width: 6,
-    height: 6,
-    borderRadius: 3,
-    backgroundColor: THEME.colors.accentSecondary,
+  statusPillInactive: {
+    backgroundColor: '#F1F5F9',
+    borderColor: '#E2E8F0',
   },
-  connectionPillText: {
-    fontSize: 12,
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#10B981',
+    marginRight: 8,
+  },
+  statusDotInactive: {
+    backgroundColor: '#94A3B8',
+  },
+  statusPillText: {
+    fontSize: 13,
     fontWeight: '600',
-    color: THEME.colors.textSecondary,
+    color: '#059669',
+  },
+  statusPillTextInactive: {
+    color: '#64748B',
   },
 
-  // --- Hero Glass Card ---
+  // ── Hero Create Card ──────────────────────────────────────────────────────
   heroCard: {
-    position: 'relative',
-    backgroundColor: 'rgba(139, 124, 255, 0.12)',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 28,
+    padding: 20,
+    marginBottom: 24,
     borderWidth: 1,
-    borderColor: 'rgba(139, 124, 255, 0.35)',
-    borderRadius: THEME.radius.cardLg,
-    padding: 22,
-    marginBottom: 26,
-    overflow: 'hidden',
-    shadowColor: THEME.colors.accentPrimary,
+    borderColor: 'rgba(255, 255, 255, 0.95)',
+    shadowColor: '#6366F1',
     shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.25,
-    shadowRadius: 18,
-    elevation: 8,
+    shadowOpacity: 0.10,
+    shadowRadius: 22,
+    elevation: 5,
+    overflow: 'hidden',
   },
-  heroGlow: {
+  heroLavenderWash: {
     position: 'absolute',
-    top: -40,
-    right: -40,
-    width: 140,
-    height: 140,
-    borderRadius: 70,
-    backgroundColor: 'rgba(139, 124, 255, 0.20)',
+    top: -20,
+    right: -20,
+    width: 150,
+    height: 160,
+    borderRadius: 75,
+    backgroundColor: 'rgba(224, 231, 255, 0.50)',
   },
   heroContent: {
     flexDirection: 'row',
@@ -272,135 +330,222 @@ const styles = StyleSheet.create({
     gap: 16,
   },
   heroIconBox: {
-    width: 48,
-    height: 48,
-    borderRadius: 16,
-    backgroundColor: THEME.colors.accentPrimary,
+    width: 58,
+    height: 58,
+    borderRadius: 20,
+    backgroundColor: '#6366F1',
     alignItems: 'center',
     justifyContent: 'center',
-    shadowColor: THEME.colors.accentPrimary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.4,
-    shadowRadius: 8,
-    elevation: 5,
+    shadowColor: '#6366F1',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.38,
+    shadowRadius: 12,
+    elevation: 6,
   },
-  heroPlusIcon: {
-    fontSize: 26,
-    color: '#ffffff',
+  heroPlusSymbol: {
+    fontSize: 32,
+    color: '#FFFFFF',
     fontWeight: '300',
-    lineHeight: 28,
+    lineHeight: 34,
   },
-  heroTag: {
-    fontSize: 10,
-    fontWeight: '800',
-    color: THEME.colors.accentSecondary,
-    letterSpacing: 1.2,
-    marginBottom: 2,
+  heroTextContainer: {
+    flex: 1,
   },
   heroTitle: {
-    fontSize: 20,
-    fontWeight: '800',
-    color: THEME.colors.textPrimary,
-    letterSpacing: -0.4,
-    marginBottom: 4,
-  },
-  heroSubtitle: {
-    fontSize: 13,
-    color: 'rgba(255, 255, 255, 0.70)',
-    fontWeight: '500',
-    lineHeight: 18,
-  },
-  heroChevron: {
-    fontSize: 26,
-    color: 'rgba(255, 255, 255, 0.5)',
-    fontWeight: '300',
-  },
-
-  // --- Section header ---
-  sectionHeader: {
-    fontSize: 12,
+    fontSize: 19,
     fontWeight: '700',
-    color: THEME.colors.textTertiary,
-    letterSpacing: 1.2,
-    marginBottom: 12,
-    marginLeft: 4,
+    color: '#0F172A',
+    letterSpacing: -0.3,
   },
-
-  // --- Standard Glass Card ---
-  glassCard: {
-    ...THEME.glassCard,
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 18,
-    marginBottom: 12,
-    gap: 14,
+  heroDescription: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '400',
+    lineHeight: 18,
+    marginTop: 4,
   },
-  cardIconBox: {
-    width: 42,
-    height: 42,
-    borderRadius: 14,
+  heroChevronBox: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#EEF2FF',
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
   },
-  cardEmoji: {
-    fontSize: 20,
-  },
-  cardTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: THEME.colors.textPrimary,
-    letterSpacing: -0.2,
-    marginBottom: 2,
-  },
-  cardSubtitle: {
-    fontSize: 13,
-    color: THEME.colors.textSecondary,
-    fontWeight: '500',
-  },
-  chevron: {
+  heroChevron: {
     fontSize: 22,
-    color: THEME.colors.textTertiary,
-    fontWeight: '300',
+    color: '#6366F1',
+    fontWeight: '500',
+    lineHeight: 24,
   },
 
-  // --- Hint Glass Card ---
-  hintGlassCard: {
+  // ── Section Divider ───────────────────────────────────────────────────────
+  sectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 18,
+  },
+  sectionLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E2E8F0',
+  },
+  sectionHeader: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#94A3B8',
+    letterSpacing: 1.2,
+    marginHorizontal: 16,
+  },
+
+  // ── Dashboard Cards ───────────────────────────────────────────────────────
+  dashCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 26,
+    padding: 18,
+    marginBottom: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.95)',
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 5 },
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
+    elevation: 3,
+    overflow: 'hidden',
+    gap: 14,
+  },
+  dashMintWash: {
+    position: 'absolute',
+    top: -20,
+    right: -20,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: 'rgba(209, 250, 229, 0.40)',
+  },
+  dashLavenderWash: {
+    position: 'absolute',
+    top: -20,
+    right: -20,
+    width: 140,
+    height: 140,
+    borderRadius: 70,
+    backgroundColor: 'rgba(238, 242, 255, 0.55)',
+  },
+  dashIconBoxMint: {
+    width: 52,
+    height: 52,
+    borderRadius: 18,
+    backgroundColor: '#D1FAE5',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#10B981',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  mintListIcon: {
+    width: 18,
+    height: 14,
+    justifyContent: 'space-between',
+  },
+  mintListLine: {
+    width: 18,
+    height: 2.5,
+    borderRadius: 1.5,
+    backgroundColor: '#059669',
+  },
+  dashIconBoxLavender: {
+    width: 52,
+    height: 52,
+    borderRadius: 18,
+    backgroundColor: '#E0E7FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#6366F1',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    elevation: 3,
+  },
+  peopleIconGlyph: {
+    fontSize: 20,
+  },
+  dashTextContainer: {
+    flex: 1,
+  },
+  dashCardTitle: {
+    fontSize: 17,
+    fontWeight: '700',
+    color: '#0F172A',
+    letterSpacing: -0.2,
+  },
+  dashCardSubtitle: {
+    fontSize: 13,
+    color: '#64748B',
+    fontWeight: '400',
+    marginTop: 3,
+  },
+  dashChevronBox: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: '#F8FAFC',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  dashChevron: {
+    fontSize: 20,
+    color: '#64748B',
+    fontWeight: '400',
+    lineHeight: 22,
+  },
+
+  // ── Hint Card ─────────────────────────────────────────────────────────────
+  hintCard: {
     flexDirection: 'row',
     alignItems: 'flex-start',
     gap: 12,
-    padding: 16,
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
-    borderRadius: THEME.radius.card,
+    padding: 18,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 22,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: '#E2E8F0',
     marginTop: 10,
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 10,
+    elevation: 2,
   },
   hintIconBox: {
-    width: 32,
-    height: 32,
-    borderRadius: 10,
-    backgroundColor: 'rgba(255, 255, 255, 0.06)',
+    width: 36,
+    height: 36,
+    borderRadius: 12,
+    backgroundColor: '#EEF2FF',
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop: 1,
   },
-  hintIcon: {
-    fontSize: 16,
+  hintIconGlyph: {
+    fontSize: 18,
   },
   hintTitle: {
     fontSize: 14,
     fontWeight: '700',
-    color: THEME.colors.textPrimary,
-    marginBottom: 3,
+    color: '#0F172A',
+    marginBottom: 4,
   },
-  hintText: {
-    fontSize: 12,
-    color: THEME.colors.textSecondary,
-    lineHeight: 18,
+  hintBody: {
+    fontSize: 13,
+    color: '#64748B',
+    lineHeight: 19,
   },
   hintLink: {
-    color: THEME.colors.accentSecondary,
+    color: '#6366F1',
     fontWeight: '700',
   },
 });

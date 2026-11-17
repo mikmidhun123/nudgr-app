@@ -15,19 +15,52 @@ service cloud.firestore {
       return uidA < uidB ? uidA + '_' + uidB : uidB + '_' + uidA;
     }
 
-    // A signed-in user is "connected to" another uid when their own mirror
-    // subcollection contains that uid. This is what grants profile reads of
-    // connected peers.
     function connectedTo(uid) {
-      return exists(/databases/$(database)/documents/users/$(request.auth.uid)/connections/$(uid));
+      let connection = /databases/$(database)/documents/connections/$(connectionDocId(request.auth.uid, uid));
+      return exists(connection)
+        && get(connection).data.status == 'connected'
+        && get(connection).data.get('verification', null) == 'invitation-code'
+        && get(connection).data.users.hasAll([request.auth.uid, uid]);
+    }
+
+    function validNudge(data) {
+      return data.senderUid is string && data.recipientUid is string
+        && data.senderUid != data.recipientUid
+        && data.message is string && data.message.size() > 0 && data.message.size() <= 4000
+        && data.triggerLatitude is number && data.triggerLatitude >= -90 && data.triggerLatitude <= 90
+        && data.triggerLongitude is number && data.triggerLongitude >= -180 && data.triggerLongitude <= 180
+        && data.radiusKm is number && data.radiusKm >= 2.5 && data.radiusKm <= 10
+        && data.get('enabled', true) is bool
+        && (data.get('title', null) == null || (data.title is string && data.title.size() <= 80))
+        && (data.get('senderName', null) == null || (data.senderName is string && data.senderName.size() <= 100))
+        && data.get('voiceStyle', 'normal') in ['normal', 'gentle', 'energetic', 'urgent', 'none']
+        && data.status in ['active', 'scheduled', 'triggered', 'completed', 'cancelled']
+        && data.get('repeatMode', 'once') in ['once', 'once_per_day', 'multiple_per_day']
+        && (data.get('cooldownMinutes', null) == null || (data.cooldownMinutes is number && data.cooldownMinutes >= 5 && data.cooldownMinutes <= 720))
+        && (data.get('requireExitBeforeRetrigger', null) == null || data.requireExitBeforeRetrigger is bool)
+        && (data.get('timezoneOffsetMinutes', null) == null || (data.timezoneOffsetMinutes is number && data.timezoneOffsetMinutes >= -720 && data.timezoneOffsetMinutes <= 840))
+        && (data.get('recipientHidden', null) == null || data.recipientHidden is bool)
+        && (data.get('lastTriggeredDate', null) == null || (data.lastTriggeredDate is string && data.lastTriggeredDate.size() <= 16))
+        && (data.get('lastTriggeredDayIndex', null) == null || data.lastTriggeredDayIndex is number)
+        && (data.get('schedule', null) == null || (data.schedule is map
+          && (data.schedule.get('activeAfter', null) == null || (data.schedule.activeAfter is number
+            && data.schedule.activeAfter >= 0 && data.schedule.activeAfter <= 253402300799000))
+          && (data.schedule.get('expiresAt', null) == null || (data.schedule.expiresAt is number
+            && data.schedule.expiresAt >= 0 && data.schedule.expiresAt <= 253402300799000))
+          && (data.schedule.get('daysOfWeek', null) == null || (data.schedule.daysOfWeek is list
+            && data.schedule.daysOfWeek.size() <= 7))))
+        && (data.get('voiceNote', null) == null
+          || (data.voiceNote is map && data.voiceNote.storageKey is string
+            && data.voiceNote.storageKey.matches('^voice/[^/]+/[^/]+$')
+            && data.voiceNote.storageKey.split('/')[1] == data.senderUid));
     }
 
     // ---------------------------------------------------------------------
     // users/{uid} — profile documents keyed by Firebase UID.
-    // Writes are owner-only. Reads are owner-only, plus connected peers.
+    // Private account data, including legacy tokens and invitation codes.
     // ---------------------------------------------------------------------
     match /users/{uid} {
-      allow read: if signedIn() && (isOwner(uid) || connectedTo(uid));
+      allow read: if signedIn() && isOwner(uid);
       allow create: if signedIn() && isOwner(uid)
         && request.resource.data.uid == uid;
       allow update: if signedIn() && isOwner(uid)
@@ -36,13 +69,28 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /profiles/{uid} {
+      allow get: if signedIn() && (isOwner(uid) || connectedTo(uid));
+      allow list: if false;
+      allow create, update: if signedIn() && isOwner(uid)
+        && request.resource.data.keys().hasOnly(['uid', 'displayName', 'email', 'updatedAt'])
+        && request.resource.data.uid == uid
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() > 0
+        && request.resource.data.displayName.size() <= 100
+        && (request.resource.data.get('email', null) == null
+          || (request.resource.data.email is string && request.resource.data.email.size() <= 254));
+      allow delete: if false;
+    }
+
     // ---------------------------------------------------------------------
     // connectionCodes/{code} — one doc per unique code: { uid, createdAt }.
-    // Any signed-in user may resolve a code to its owner (required for the
-    // connect flow). Only the owner may create/update/delete their code.
+    // Owners manage their codes; only the authenticated server resolves peers.
     // ---------------------------------------------------------------------
     match /connectionCodes/{code} {
-      allow read: if signedIn();
+      allow get: if signedIn() && (!exists(/databases/$(database)/documents/connectionCodes/$(code))
+        || resource.data.uid == request.auth.uid);
+      allow list: if false;
       allow create: if signedIn() && request.resource.data.uid == request.auth.uid;
       allow update: if signedIn()
         && resource.data.uid == request.auth.uid
@@ -53,34 +101,21 @@ service cloud.firestore {
     // ---------------------------------------------------------------------
     // connections/{connectionId} — canonical record for a pair of users.
     // connectionId == connectionDocId(uidA, uidB); users is the sorted pair.
-    // Only members may read/update/delete; creation must include the
-    // authenticated user and match the deterministic id exactly, so a user
-    // cannot create connections between two unrelated people.
+    // Members may read; only the server writes after checking an invitation.
     // ---------------------------------------------------------------------
     match /connections/{connectionId} {
-      allow read, delete: if signedIn() && resource.data.users.hasAll([request.auth.uid]);
-      allow create: if signedIn()
-        && request.resource.data.users.size() == 2
-        && request.resource.data.users.hasAll([request.auth.uid])
-        && request.resource.data.users[0] < request.resource.data.users[1]
-        && request.resource.data.connectionId == connectionId
-        && connectionId == connectionDocId(request.resource.data.users[0], request.resource.data.users[1]);
-      allow update: if signedIn()
-        && resource.data.users.hasAll([request.auth.uid])
-        && request.resource.data.users == resource.data.users;
+      allow read: if signedIn() && resource.data.users.hasAll([request.auth.uid]);
+      // The authenticated, rate-limited server verifies the invitation code.
+      allow write: if false;
     }
 
     // ---------------------------------------------------------------------
     // users/{uid}/connections/{otherUid} — per-user mirror of each
-    // connection, enabling simple per-user queries. Symmetrical permission:
-    // Either party in the connection can create/update the mirror document
-    // when the canonical connection record is created.
+    // connection, enabling owner queries. Written only by the server.
     // ---------------------------------------------------------------------
     match /users/{uid}/connections/{otherUid} {
-      allow read, delete: if signedIn() && (isOwner(uid) || request.auth.uid == otherUid);
-      allow create, update: if signedIn()
-        && (isOwner(uid) || request.auth.uid == otherUid)
-        && getAfter(/databases/$(database)/documents/connections/$(connectionDocId(uid, otherUid))).data != null;
+      allow read: if signedIn() && isOwner(uid);
+      allow write: if false;
     }
 
     // ---------------------------------------------------------------------
@@ -89,7 +124,13 @@ service cloud.firestore {
     // can register multiple devices).
     // ---------------------------------------------------------------------
     match /users/{uid}/devices/{deviceId} {
-      allow read, write: if signedIn() && isOwner(uid);
+      allow read, delete: if signedIn() && isOwner(uid);
+      allow create, update: if signedIn() && isOwner(uid)
+        && request.resource.data.keys().hasOnly(['uid', 'deviceId', 'fcmToken', 'platform', 'enabled', 'updatedAt'])
+        && request.resource.data.uid == uid && request.resource.data.deviceId == deviceId
+        && request.resource.data.fcmToken is string
+        && request.resource.data.fcmToken.size() > 0 && request.resource.data.fcmToken.size() <= 4096
+        && request.resource.data.enabled is bool;
     }
 
     // ---------------------------------------------------------------------
@@ -104,7 +145,10 @@ service cloud.firestore {
         && (request.auth.uid == resource.data.senderUid
             || request.auth.uid == resource.data.recipientUid);
       allow create: if signedIn()
+        && !request.resource.data.keys().hasAny(['voiceUrl', 'audioUrl', 'recordingUrl'])
+        && validNudge(request.resource.data)
         && request.resource.data.senderUid == request.auth.uid
+        && connectedTo(request.resource.data.recipientUid)
         && request.resource.data.recipientUid != request.auth.uid
         && request.resource.data.recipientUid is string
         && request.resource.data.status in ['active', 'scheduled']
@@ -117,16 +161,27 @@ service cloud.firestore {
       allow update: if signedIn() && (
         // Sender manages their own Nudgr (status, schedule) but identity fields are immutable.
         (request.auth.uid == resource.data.senderUid
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['voiceUrl', 'audioUrl', 'recordingUrl'])
+            || (request.resource.data.get('voiceUrl', null) == null && request.resource.data.get('audioUrl', null) == null
+              && request.resource.data.get('recordingUrl', null) == null))
+          && validNudge(request.resource.data)
           && request.resource.data.senderUid == resource.data.senderUid
-          && request.resource.data.recipientUid == resource.data.recipientUid)
+          && request.resource.data.recipientUid == resource.data.recipientUid
+          && (!request.resource.data.diff(resource.data).affectedKeys().hasAny(['triggeredAt', 'lastTriggeredAt', 'lastTriggerEventId', 'lastTriggerExpiresAtMs', 'lastTriggeredDate', 'lastTriggeredDayIndex'])
+            || ((request.resource.data.get('repeatMode', 'once') == 'once' ? request.resource.data.status == 'triggered' : request.resource.data.status == 'active')
+              && request.resource.data.lastTriggeredAt == request.time
+              && request.resource.data.lastTriggerEventId is string
+              && existsAfter(/databases/$(database)/documents/nudges/$(nudgeId)/triggerEvents/$(request.resource.data.lastTriggerEventId))
+              && getAfter(/databases/$(database)/documents/nudges/$(nudgeId)/triggerEvents/$(request.resource.data.lastTriggerEventId)).data.createdAt == request.time
+              && request.resource.data.lastTriggerExpiresAtMs == getAfter(/databases/$(database)/documents/nudges/$(nudgeId)/triggerEvents/$(request.resource.data.lastTriggerEventId)).data.observedAtMs + 300000)))
         // Recipient may transition status or toggle enabled/disabled state; identity stays fixed.
         || (request.auth.uid == resource.data.recipientUid
           && request.resource.data.senderUid == resource.data.senderUid
           && request.resource.data.recipientUid == resource.data.recipientUid
-          && (
-            request.resource.data.status in ['triggered', 'completed']
-            || request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enabled', 'disableMode', 'disabledUntil', 'disabledUntilDate', 'status', 'updatedAt'])
-          ))
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['enabled', 'disableMode', 'disabledUntil', 'disabledUntilDate', 'status', 'recipientHidden', 'updatedAt'])
+          && (request.resource.data.get('recipientHidden', false) is bool)
+          && (request.resource.data.status == resource.data.status
+              || (resource.data.get('repeatMode', 'once') == 'once' && request.resource.data.status == 'completed')))
       );
       allow delete: if false;
     }
@@ -137,28 +192,84 @@ service cloud.firestore {
     // Sender and recipient can read their own trigger events.
     // ---------------------------------------------------------------------
     match /nudges/{nudgeId}/triggerEvents/{triggerEventId} {
+      function parentNudge() { return get(/databases/$(database)/documents/nudges/$(nudgeId)).data; }
+      function canTrigger() {
+        let parent = parentNudge();
+        let last = parent.get('lastTriggeredAt', null);
+        let repeatMode = parent.get('repeatMode', 'once');
+        let cooldownMins = parent.get('cooldownMinutes', 30) is number && parent.get('cooldownMinutes', 30) >= 5 ? parent.get('cooldownMinutes', 30) : 30;
+        let tzOffsetMs = (parent.get('timezoneOffsetMinutes', 0) is number ? parent.get('timezoneOffsetMinutes', 0) : 0) * 60000;
+        let todayDayIdx = int((request.time.toMillis() + tzOffsetMs) / 86400000);
+        return parent.status in ['active', 'scheduled']
+          && (parent.get('schedule', null) == null
+            || (parent.schedule.get('activeAfter', 0) <= request.time.toMillis()
+              && (parent.schedule.get('expiresAt', null) == null || parent.schedule.expiresAt > request.time.toMillis())))
+          && (parent.get('enabled', true) != false
+            || (parent.get('disableMode', null) == 'today' && parent.disabledUntil <= request.time.toMillis()))
+          && (
+            (repeatMode == 'once' && (last == null
+              || (last is timestamp && request.time - last >= duration.value(30, 'm'))
+              || (last is number && request.time.toMillis() - last >= 1800000)))
+            || (repeatMode == 'once_per_day'
+              && parent.get('lastTriggeredDayIndex', null) != todayDayIdx
+              && (last == null
+                || (last is timestamp && int((last.toMillis() + tzOffsetMs) / 86400000) != todayDayIdx)
+                || (last is number && int((last + tzOffsetMs) / 86400000) != todayDayIdx)))
+            || (repeatMode == 'multiple_per_day' && (last == null
+              || (last is timestamp && request.time.toMillis() - last.toMillis() >= cooldownMins * 60000)
+              || (last is number && request.time.toMillis() - last >= cooldownMins * 60000)))
+          );
+      }
       allow read: if signedIn()
         && (resource.data.senderUid == request.auth.uid
             || resource.data.recipientUid == request.auth.uid
             || get(/databases/$(database)/documents/nudges/$(nudgeId)).data.senderUid == request.auth.uid
             || get(/databases/$(database)/documents/nudges/$(nudgeId)).data.recipientUid == request.auth.uid);
       allow create: if signedIn()
+        && request.resource.data.keys().hasOnly(['nudgeId', 'triggerEventId', 'senderUid', 'recipientUid',
+          'triggerLatitude', 'triggerLongitude', 'triggeredAt', 'status', 'createdAt', 'updatedAt', 'deliveryVersion', 'observedAtMs'])
+        && request.resource.data.deliveryVersion == 2
+        && request.resource.data.triggerEventId == triggerEventId
+        && request.resource.data.createdAt == request.time
+        && request.resource.data.observedAtMs is number
+        && request.resource.data.observedAtMs > request.time.toMillis() - 300000
+        && request.resource.data.observedAtMs <= request.time.toMillis() + 30000
         && request.resource.data.senderUid == request.auth.uid
         && request.resource.data.nudgeId == nudgeId
         && request.resource.data.status == 'CREATED'
         && request.resource.data.triggerLatitude is number
+        && request.resource.data.triggerLatitude >= -90 && request.resource.data.triggerLatitude <= 90
         && request.resource.data.triggerLongitude is number
+        && request.resource.data.triggerLongitude >= -180 && request.resource.data.triggerLongitude <= 180
         && exists(/databases/$(database)/documents/nudges/$(nudgeId))
         && get(/databases/$(database)/documents/nudges/$(nudgeId)).data.senderUid == request.auth.uid
+        && canTrigger()
+        && connectedTo(parentNudge().recipientUid)
+        && getAfter(/databases/$(database)/documents/nudges/$(nudgeId)).data.lastTriggerEventId == triggerEventId
+        && getAfter(/databases/$(database)/documents/nudges/$(nudgeId)).data.lastTriggeredAt == request.time
+        && (parentNudge().get('repeatMode', 'once') == 'once' ? getAfter(/databases/$(database)/documents/nudges/$(nudgeId)).data.status == 'triggered' : getAfter(/databases/$(database)/documents/nudges/$(nudgeId)).data.status == 'active')
         && (
           !('recipientUid' in request.resource.data)
           || request.resource.data.recipientUid == null
           || request.resource.data.recipientUid == get(/databases/$(database)/documents/nudges/$(nudgeId)).data.recipientUid
         );
-      allow update: if signedIn()
-        && (request.auth.uid == resource.data.senderUid
-            || get(/databases/$(database)/documents/nudges/$(nudgeId)).data.senderUid == request.auth.uid)
-        && request.resource.data.status in ['CREATED', 'FCM_SENT', 'FCM_FAILED', 'COMPLETED', 'MISSED', 'DECLINED', 'EXPIRED'];
+      // Transport outcomes belong to the backend. Recipient actions are receipts.
+      allow update: if false;
+      allow delete: if false;
+    }
+
+    match /nudges/{nudgeId}/triggerEvents/{triggerEventId}/receipts/{deviceId} {
+      function parent() { return get(/databases/$(database)/documents/nudges/$(nudgeId)).data; }
+      allow read: if signedIn() && request.auth.uid in [parent().senderUid, parent().recipientUid];
+      allow create, update: if signedIn() && request.auth.uid == parent().recipientUid
+        && exists(/databases/$(database)/documents/nudges/$(nudgeId)/triggerEvents/$(triggerEventId))
+        && request.resource.data.keys().hasOnly(['deviceId', 'recipientUid', 'state', 'updatedAt'])
+        && request.resource.data.deviceId == deviceId
+        && request.resource.data.recipientUid == request.auth.uid
+        && request.resource.data.state in ['RECEIVED', 'ANSWERED', 'DECLINED', 'MISSED']
+        && request.resource.data.updatedAt == request.time
+        && (!exists(/databases/$(database)/documents/nudges/$(nudgeId)/triggerEvents/$(triggerEventId)/receipts/$(deviceId))
+          || resource.data.state == 'RECEIVED' || request.resource.data.state == resource.data.state);
       allow delete: if false;
     }
   }

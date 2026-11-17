@@ -14,11 +14,11 @@ import { getMessaging } from '../firebase';
  */
 export function attachFcmListeners({ onNudgeMessage, onNudgeOpened }) {
   const messaging = getMessaging();
+  let active = true;
 
   const handle = (remoteMessage) => {
-    if (!remoteMessage) return null;
+    if (!active || !remoteMessage) return null;
     const data = remoteMessage.data || {};
-    console.log('[NOTIFICATION_DEBUG] FCM RemoteMessage data:', JSON.stringify(data));
     // Only handle nudge_incoming or nudge type for incoming experience
     if (data.type === 'nudge_incoming' || data.type === 'nudge' || data.nudgeId) {
       return {
@@ -26,6 +26,7 @@ export function attachFcmListeners({ onNudgeMessage, onNudgeOpened }) {
         senderName: data.senderName || null,
         message: data.message || null,
         data,
+        sentTime: remoteMessage.sentTime,
       };
     }
     return null;
@@ -64,6 +65,7 @@ export function attachFcmListeners({ onNudgeMessage, onNudgeOpened }) {
     });
 
   return () => {
+    active = false;
     unsubOn();
     unsubOpened();
   };

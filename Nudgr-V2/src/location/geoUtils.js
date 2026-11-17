@@ -1,12 +1,57 @@
 /**
- * Pure calculation utilities for location, geofencing, schedules, and cooldowns.
+ * Pure calculation utilities for location, geofencing, schedules, repeat policies, and cooldowns.
  * Zero external dependencies — completely free of circular module imports.
  */
 
 export const RADIUS_MIN_KM = 2.5;
 export const RADIUS_MAX_KM = 10.0;
 export const RADIUS_DEFAULT_KM = 5.0;
-export const DEFAULT_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes cooldown per Nudgr
+export const DEFAULT_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes default cooldown
+export const EXIT_HYSTERESIS_MIN_METERS = 200; // 200m buffer beyond radius to confirm exit
+
+export const REPEAT_MODE = {
+  ONCE: 'once',
+  ONCE_PER_DAY: 'once_per_day',
+  MULTIPLE_PER_DAY: 'multiple_per_day',
+};
+
+/**
+ * Formats a Date into 'YYYY-MM-DD' in local calendar time.
+ */
+export function localDateKey(date = new Date()) {
+  const d = date instanceof Date ? date : new Date(date);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+/**
+ * Computes the integer local calendar day index since Unix epoch,
+ * matching Firestore security rules: int((nowMs + tzOffsetMinutes * 60000) / 86400000).
+ */
+export function localDayIndex(nowMs = Date.now(), tzOffsetMinutes = null) {
+  const offsetMin =
+    typeof tzOffsetMinutes === 'number' && Number.isFinite(tzOffsetMinutes)
+      ? tzOffsetMinutes
+      : -new Date(nowMs).getTimezoneOffset();
+  return Math.floor((nowMs + offsetMin * 60000) / 86400000);
+}
+
+/**
+ * Extracts epoch milliseconds from a Firestore Timestamp or numeric timestamp.
+ */
+export function extractTimestampMs(val) {
+  if (!val) return null;
+  if (typeof val === 'number' && Number.isFinite(val)) return val;
+  if (typeof val?.toMillis === 'function') {
+    const ms = val.toMillis();
+    return typeof ms === 'number' && Number.isFinite(ms) ? ms : null;
+  }
+  const sec = val?.seconds ?? val?._seconds;
+  if (typeof sec === 'number' && Number.isFinite(sec)) {
+    const nano = val?.nanoseconds ?? val?._nanoseconds ?? 0;
+    return sec * 1000 + Math.floor(nano / 1000000);
+  }
+  return null;
+}
 
 /**
  * Calculates the great-circle distance between two GPS coordinates in meters
@@ -42,10 +87,8 @@ export function calculateDistanceMeters(lat1, lon1, lat2, lon2) {
 export function isCooldownActive(nudge, cooldownMs = DEFAULT_COOLDOWN_MS, nowMs = Date.now()) {
   if (!nudge) return false;
   const lastTrigger =
-    nudge.lastTriggeredAt?.toMillis?.() ||
-    (typeof nudge.lastTriggeredAt === 'number' ? nudge.lastTriggeredAt : null) ||
-    nudge.triggeredAt?.toMillis?.() ||
-    (typeof nudge.triggeredAt === 'number' ? nudge.triggeredAt : null);
+    extractTimestampMs(nudge.lastTriggeredAt) ||
+    extractTimestampMs(nudge.triggeredAt);
 
   if (!lastTrigger) return false;
   return nowMs - lastTrigger < cooldownMs;
@@ -53,25 +96,132 @@ export function isCooldownActive(nudge, cooldownMs = DEFAULT_COOLDOWN_MS, nowMs 
 
 /**
  * Returns true when the Nudgr's schedule permits triggering at the current time.
+ * Supports:
+ * - activeAfter (earliest activation timestamp)
+ * - expiresAt (optional expiration timestamp)
+ * - startHour/startMinute (or legacy afterHour/afterMinute)
+ * - endHour/endMinute (supports both same-day and overnight windows)
+ * - daysOfWeek (array of 0=Sun..6=Sat)
  */
 export function scheduleAllows(nudge, now = new Date()) {
+  if (!nudge) return false;
   const s = nudge.schedule;
   if (!s) return true;
 
-  if (typeof s.activeAfter === 'number' && now.getTime() < s.activeAfter) {
+  const d = now instanceof Date ? now : new Date(now);
+  const nowMs = d.getTime();
+
+  if (typeof s.activeAfter === 'number' && nowMs < s.activeAfter) {
     return false;
   }
 
-  if (typeof s.afterHour === 'number') {
-    const afterMinute = typeof s.afterMinute === 'number' ? s.afterMinute : 0;
-    const currentMinutes = now.getHours() * 60 + now.getMinutes();
-    const targetMinutes = s.afterHour * 60 + afterMinute;
-    if (currentMinutes < targetMinutes) {
+  if (typeof s.expiresAt === 'number' && s.expiresAt > 0 && nowMs >= s.expiresAt) {
+    return false;
+  }
+
+  const startHour =
+    typeof s.startHour === 'number'
+      ? s.startHour
+      : typeof s.afterHour === 'number'
+      ? s.afterHour
+      : null;
+  const startMinute =
+    typeof s.startMinute === 'number'
+      ? s.startMinute
+      : typeof s.afterMinute === 'number'
+      ? s.afterMinute
+      : 0;
+  const endHour = typeof s.endHour === 'number' ? s.endHour : null;
+  const endMinute = typeof s.endMinute === 'number' ? s.endMinute : 59;
+
+  let effectiveDayOfWeek = d.getDay();
+
+  if (startHour !== null) {
+    const currentMinutes = d.getHours() * 60 + d.getMinutes();
+    const startMinutes = startHour * 60 + startMinute;
+
+    if (endHour !== null) {
+      const endMinutes = endHour * 60 + endMinute;
+      if (endMinutes >= startMinutes) {
+        // Same-day window (e.g. 09:00 to 18:00)
+        if (currentMinutes < startMinutes || currentMinutes > endMinutes) {
+          return false;
+        }
+      } else {
+        // Overnight window (e.g. 22:00 to 06:00)
+        if (currentMinutes < startMinutes && currentMinutes > endMinutes) {
+          return false;
+        }
+        // Post-midnight spillover belongs to the previous day's schedule
+        if (currentMinutes <= endMinutes) {
+          effectiveDayOfWeek = (d.getDay() + 6) % 7;
+        }
+      }
+    } else if (currentMinutes < startMinutes) {
+      return false;
+    }
+  }
+
+  if (Array.isArray(s.daysOfWeek) && s.daysOfWeek.length > 0) {
+    if (!s.daysOfWeek.includes(effectiveDayOfWeek)) {
       return false;
     }
   }
 
   return true;
+}
+
+/**
+ * Evaluates whether a Nudgr's repeat preference permits triggering right now.
+ *
+ * @param {object} nudge - The Nudgr document
+ * @param {Date} [now=new Date()] - Current time
+ * @param {boolean} [insideZone=false] - Whether the sender is already recorded inside the geofence
+ * @returns {boolean}
+ */
+export function canTriggerByRepeatPolicy(nudge, now = new Date(), insideZone = false) {
+  if (!nudge) return false;
+  if (nudge.status === 'cancelled') return false;
+
+  const d = now instanceof Date ? now : new Date(now);
+  const nowMs = d.getTime();
+  const mode = nudge.repeatMode || REPEAT_MODE.ONCE;
+
+  if (mode === REPEAT_MODE.ONCE) {
+    if (['triggered', 'completed', 'cancelled'].includes(nudge.status)) {
+      return false;
+    }
+    return !isCooldownActive(nudge, DEFAULT_COOLDOWN_MS, nowMs);
+  }
+
+  if (mode === REPEAT_MODE.ONCE_PER_DAY) {
+    const todayStr = localDateKey(d);
+    if (nudge.lastTriggeredDate === todayStr) {
+      return false;
+    }
+    const todayIdx = localDayIndex(nowMs, nudge.timezoneOffsetMinutes);
+    if (typeof nudge.lastTriggeredDayIndex === 'number' && nudge.lastTriggeredDayIndex === todayIdx) {
+      return false;
+    }
+    const lastMs = extractTimestampMs(nudge.lastTriggeredAt);
+    if (lastMs && localDateKey(new Date(lastMs)) === todayStr) {
+      return false;
+    }
+    return true;
+  }
+
+  if (mode === REPEAT_MODE.MULTIPLE_PER_DAY) {
+    if (nudge.requireExitBeforeRetrigger !== false && insideZone === true) {
+      return false;
+    }
+    const cooldownMins =
+      typeof nudge.cooldownMinutes === 'number' && nudge.cooldownMinutes >= 5
+        ? Math.min(720, nudge.cooldownMinutes)
+        : 30;
+    return !isCooldownActive(nudge, cooldownMins * 60 * 1000, nowMs);
+  }
+
+  return !isCooldownActive(nudge, DEFAULT_COOLDOWN_MS, nowMs);
 }
 
 /**
@@ -96,4 +246,29 @@ export function isWithinRadius(nudge, coords) {
     nudge.triggerLongitude
   );
   return distance <= nudge.radiusKm * 1000;
+}
+
+/**
+ * Checks whether the device has clearly exited the geofence (including hysteresis buffer).
+ */
+export function hasExitedRadiusWithHysteresis(nudge, coords) {
+  if (
+    !coords ||
+    typeof coords.latitude !== 'number' ||
+    typeof coords.longitude !== 'number' ||
+    typeof nudge?.triggerLatitude !== 'number' ||
+    typeof nudge?.triggerLongitude !== 'number' ||
+    typeof nudge?.radiusKm !== 'number'
+  ) {
+    return false;
+  }
+  const distance = calculateDistanceMeters(
+    coords.latitude,
+    coords.longitude,
+    nudge.triggerLatitude,
+    nudge.triggerLongitude
+  );
+  const accuracyBuffer = typeof coords.accuracy === 'number' && coords.accuracy > 0 ? coords.accuracy : 0;
+  const hysteresis = Math.max(accuracyBuffer, EXIT_HYSTERESIS_MIN_METERS);
+  return distance > nudge.radiusKm * 1000 + hysteresis;
 }

@@ -28,11 +28,7 @@ class MainActivity : ReactActivity() {
     setTheme(R.style.AppTheme);
     super.onCreate(null)
 
-    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
-      setShowWhenLocked(true)
-      setTurnScreenOn(true)
-    }
-
+    allowIncomingOnLockscreen(false)
     handleIncomingNudgrIntent(intent)
   }
 
@@ -50,6 +46,11 @@ class MainActivity : ReactActivity() {
         ?: ""
     val action = intent.getStringExtra("action") ?: "OPEN"
     val startAnswered = intent.getBooleanExtra("startAnswered", action == "ANSWER")
+    val incoming = NudgrIncomingState.get(this, nudgeId) ?: return
+    if (intent.getStringExtra("authNonce") != incoming.optString("intentNonce")) return
+    if (incoming.optString("triggerId") != triggerId || incoming.optLong("expiresAt") <= System.currentTimeMillis() ||
+        incoming.optString("state") !in listOf("ringing", "answered")) return
+    allowIncomingOnLockscreen(true)
 
     android.util.Log.d("MainActivity", "[NUDGR_INTENT] action=$action nudgeId=$nudgeId triggerId=$triggerId startAnswered=$startAnswered")
 
@@ -60,6 +61,13 @@ class MainActivity : ReactActivity() {
     // OPEN/full-screen keeps native ringing until IncomingNudge's audio is ready.
     NudgrNativeBridge.setInitialAction(this, action, nudgeId, triggerId, startAnswered)
     NudgrNativeBridge.sendActionToJs(action, nudgeId, triggerId, startAnswered)
+  }
+
+  fun allowIncomingOnLockscreen(allowed: Boolean) {
+    if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O_MR1) {
+      setShowWhenLocked(allowed)
+      setTurnScreenOn(allowed)
+    }
   }
 
   /**

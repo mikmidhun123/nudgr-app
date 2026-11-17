@@ -18,6 +18,13 @@ local.properties
 *.log
 tmp/
 tmp_check/
+evidence/
+Nudgr-V2/evidence/
+
+# Build binary artifacts
+*.apk
+*.aab
+*.idsig
 
 # Secrets / signing keys
 .env
@@ -31,3 +38,10 @@ tmp_check/
 # OS
 .DS_Store
 Thumbs.db
+
+# Graphify internal cache (preserve graph.json and GRAPH_REPORT.md)
+graphify-out/cache/
+graphify-out/memory/
+graphify-out/reflections/
+graphify-out/.graphify_*
+graphify-out/.vocab.txt

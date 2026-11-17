@@ -10,7 +10,7 @@ import { THEME } from './theme';
 const STEP_KM = 0.1;
 
 /**
- * Smooth, precise, user-controlled trigger radius slider in iPhone Glass style.
+ * Smooth, precise, user-controlled trigger radius slider.
  * Range: 2.5 km (min) … 10.0 km (max), 0.1 km fine increments.
  */
 export default function RadiusSlider({ value, onChange }) {
@@ -95,7 +95,8 @@ export default function RadiusSlider({ value, onChange }) {
           <Text style={styles.sublabel}>Distance from arrival target</Text>
         </View>
         <View style={styles.valueBadge}>
-          <Text style={styles.valueText}>{clampedCurrent.toFixed(1)} km</Text>
+          <Text style={styles.valueText}>{clampedCurrent.toFixed(1)}</Text>
+          <Text style={styles.valueUnit}> km</Text>
         </View>
       </View>
 
@@ -105,7 +106,7 @@ export default function RadiusSlider({ value, onChange }) {
           onPress={() => adjustBy(-0.5)}
           activeOpacity={0.7}
         >
-          <Text style={styles.quickStepText}>-0.5</Text>
+          <Text style={styles.quickStepText}>−</Text>
         </TouchableOpacity>
 
         <View
@@ -130,13 +131,13 @@ export default function RadiusSlider({ value, onChange }) {
           onPress={() => adjustBy(0.5)}
           activeOpacity={0.7}
         >
-          <Text style={styles.quickStepText}>+0.5</Text>
+          <Text style={styles.quickStepText}>+</Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.boundRow}>
         <Text style={styles.boundText}>{RADIUS_MIN_KM.toFixed(1)} km</Text>
-        <Text style={styles.hintText}>Smooth 0.1 km precision</Text>
+        <Text style={styles.hintText}>0.1 km precision</Text>
         <Text style={styles.boundText}>{RADIUS_MAX_KM.toFixed(1)} km</Text>
       </View>
     </View>
@@ -146,10 +147,10 @@ export default function RadiusSlider({ value, onChange }) {
 const styles = StyleSheet.create({
   container: {
     marginVertical: 12,
-    backgroundColor: THEME.colors.bgCard,
-    borderRadius: THEME.radius.card,
+    backgroundColor: '#F8FAFC',
+    borderRadius: 20,
     borderWidth: 1,
-    borderColor: THEME.colors.glassBorder,
+    borderColor: '#E2E8F0',
     padding: 16,
   },
   headerRow: {
@@ -160,28 +161,35 @@ const styles = StyleSheet.create({
   },
   label: {
     fontSize: 11,
-    fontWeight: '800',
-    color: THEME.colors.textSecondary,
-    letterSpacing: 1.2,
+    fontWeight: '700',
+    color: '#94A3B8',
+    letterSpacing: 1.0,
   },
   sublabel: {
     fontSize: 12,
-    color: THEME.colors.textTertiary,
+    color: '#64748B',
     marginTop: 2,
   },
   valueBadge: {
-    backgroundColor: 'rgba(139, 124, 255, 0.18)',
+    flexDirection: 'row',
+    alignItems: 'baseline',
+    backgroundColor: '#EEF2FF',
     borderWidth: 1,
-    borderColor: 'rgba(139, 124, 255, 0.40)',
+    borderColor: '#C7D2FE',
     paddingHorizontal: 12,
     paddingVertical: 5,
-    borderRadius: THEME.radius.pill,
+    borderRadius: 16,
   },
   valueText: {
-    fontSize: 15,
-    fontWeight: '700',
-    color: '#ffffff',
-    letterSpacing: 0.2,
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#6366F1',
+    letterSpacing: -0.3,
+  },
+  valueUnit: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#64748B',
   },
   sliderRow: {
     flexDirection: 'row',
@@ -189,29 +197,37 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
   },
   quickStepBtn: {
-    backgroundColor: 'rgba(255, 255, 255, 0.08)',
-    borderColor: 'rgba(255, 255, 255, 0.14)',
+    backgroundColor: '#FFFFFF',
+    borderColor: '#E2E8F0',
     borderWidth: 1,
     borderRadius: 12,
-    paddingVertical: 8,
-    paddingHorizontal: 10,
+    width: 36,
+    height: 36,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.06,
+    shadowRadius: 4,
+    elevation: 2,
   },
   quickStepText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: THEME.colors.accentSecondary,
+    fontSize: 18,
+    fontWeight: '600',
+    color: '#6366F1',
+    lineHeight: 20,
   },
   touchArea: {
     flex: 1,
     height: 40,
     justifyContent: 'center',
-    paddingHorizontal: 14,
+    paddingHorizontal: 12,
   },
   track: {
     position: 'relative',
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: 'rgba(255, 255, 255, 0.12)',
+    height: 6,
+    borderRadius: 3,
+    backgroundColor: '#E2E8F0',
     justifyContent: 'center',
   },
   fill: {
@@ -219,24 +235,24 @@ const styles = StyleSheet.create({
     left: 0,
     top: 0,
     bottom: 0,
-    borderRadius: 4,
-    backgroundColor: THEME.colors.accentPrimary,
+    borderRadius: 3,
+    backgroundColor: '#6366F1',
   },
   thumb: {
     position: 'absolute',
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#ffffff',
+    width: 22,
+    height: 22,
+    borderRadius: 11,
+    backgroundColor: '#FFFFFF',
     borderWidth: 3,
-    borderColor: THEME.colors.accentPrimary,
-    marginLeft: -12,
+    borderColor: '#6366F1',
+    marginLeft: -11,
     top: -8,
-    elevation: 6,
-    shadowColor: '#000',
+    elevation: 5,
+    shadowColor: '#6366F1',
     shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.4,
-    shadowRadius: 5,
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
   },
   boundRow: {
     flexDirection: 'row',
@@ -246,11 +262,11 @@ const styles = StyleSheet.create({
   },
   boundText: {
     fontSize: 11,
-    color: THEME.colors.textTertiary,
+    color: '#94A3B8',
     fontWeight: '600',
   },
   hintText: {
     fontSize: 11,
-    color: THEME.colors.textTertiary,
+    color: '#94A3B8',
   },
 });

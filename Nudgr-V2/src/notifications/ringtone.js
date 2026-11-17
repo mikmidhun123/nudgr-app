@@ -1,4 +1,4 @@
-import { Audio } from 'expo-av';
+import { Audio } from '../voice/audio';
 import { Platform } from 'react-native';
 
 let ringtoneSound = null;
@@ -10,90 +10,47 @@ let startOperation = null;
  * Thread-safe singleton: ensures only one Audio.Sound instance can ever play.
  * @returns {Promise<void>}
  */
+let generation = 0;
 export async function startRingtone() {
-  if (isPlaying && ringtoneSound) {
-    return true; // Already playing
-  }
-
-  // If a start operation is already in flight, await it
-  if (startOperation) {
+  if (isPlaying && ringtoneSound) return true;
+  if (startOperation) return startOperation;
+  const ownGeneration = ++generation;
+  const operation = (async () => {
+    let sound;
     try {
-      await startOperation;
-    } catch (_) {}
-    if (isPlaying) return true;
-  }
-
-  startOperation = (async () => {
-    try {
-      // Ensure any existing sound is cleaned up first
-      if (ringtoneSound) {
-        try {
-          await ringtoneSound.stopAsync();
-          await ringtoneSound.unloadAsync();
-        } catch (_) {}
-        ringtoneSound = null;
-      }
-
-      await Audio.setAudioModeAsync({
-        playsInSilentModeIOS: true,
-        staysActiveInBackground: true,
-        shouldDuckAndroid: false,
-        playThroughEarpieceAndroid: false,
-      });
-
-      const { sound } = await Audio.Sound.createAsync(
-        require('../../assets/sounds/ringtone.mp3'),
-        { shouldPlay: true, isLooping: true, volume: 1.0 },
-        null,
-        // Android already packages this as a raw resource; no filesystem download is needed.
-        Platform.OS !== 'android'
-      );
-      
+      await Audio.setAudioModeAsync({ playsInSilentModeIOS: true, staysActiveInBackground: true,
+        shouldDuckAndroid: false, playThroughEarpieceAndroid: false });
+      if (generation !== ownGeneration) return false;
+      const loaded = await Audio.Sound.createAsync(require('../../assets/sounds/ringtone.mp3'),
+        { shouldPlay: false, isLooping: true, volume: 1 }, null, Platform.OS !== 'android');
+      sound = loaded.sound;
+      if (generation !== ownGeneration) { await sound.unloadAsync(); return false; }
       ringtoneSound = sound;
+      await sound.playAsync();
+      if (generation !== ownGeneration) return false;
       isPlaying = true;
-      
-      if (__DEV__) console.log('[ringtone] Started playing');
-    } catch (e) {
-      console.warn('[ringtone] start error:', e.message);
-      ringtoneSound = null;
-      isPlaying = false;
-    } finally {
-      startOperation = null;
+      return true;
+    } catch (error) {
+      await sound?.unloadAsync().catch(() => {});
+      if (generation === ownGeneration) { ringtoneSound = null; isPlaying = false; }
+      if (__DEV__) console.warn('[ringtone:start]', error.message);
+      return false;
     }
   })();
-
-  await startOperation;
-  return isPlaying;
+  startOperation = operation;
+  operation.finally(() => { if (startOperation === operation) startOperation = null; });
+  return operation;
 }
 
-/**
- * Stops the ringtone immediately and unloads all audio resources.
- * @returns {Promise<void>}
- */
 export async function stopRingtone() {
-  // If starting in flight, wait for it so we don't leave an orphaned playing sound
-  if (startOperation) {
-    try {
-      await startOperation;
-    } catch (_) {}
-  }
-
-  if (!ringtoneSound) {
-    isPlaying = false;
-    return;
-  }
-
-  const soundToClean = ringtoneSound;
+  generation += 1;
+  startOperation = null;
+  const sound = ringtoneSound;
   ringtoneSound = null;
   isPlaying = false;
-
-  try {
-    await soundToClean.stopAsync();
-    await soundToClean.unloadAsync();
-    if (__DEV__) console.log('[ringtone] Stopped and unloaded');
-  } catch (e) {
-    if (__DEV__) console.warn('[ringtone] stop error:', e.message);
-  }
+  if (!sound) return;
+  try { await sound.stopAsync(); } catch (_) { /* Unload still releases the player. */ }
+  await sound.unloadAsync().catch(() => {});
 }
 
 /**

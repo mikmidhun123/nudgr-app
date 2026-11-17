@@ -1,20 +1,24 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { StyleSheet, Text, View, SafeAreaView, ActivityIndicator, PermissionsAndroid, Platform, BackHandler, StatusBar } from 'react-native';
-import { registerRootComponent } from 'expo';
+import { StyleSheet, Text, View, ActivityIndicator, Platform, BackHandler, StatusBar } from 'react-native';
+import { GestureHandlerRootView } from 'react-native-gesture-handler';
+import { SafeAreaProvider, SafeAreaView } from 'react-native-safe-area-context';
 import * as Notifications from 'expo-notifications';
 import messaging from '@react-native-firebase/messaging';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import { attachFirebaseFoundation, getAuth, getMessaging } from './src/firebase';
+import { attachFirebaseFoundation, getAuth } from './src/firebase';
+import { createSessionManager } from './src/runtime/session';
+import { parseIncoming, timestampMillis, DELIVERY_TTL_MS } from './src/runtime/incoming';
+import { getLatestTriggerEvent } from './src/db/triggers';
+import { stopNudgeMessage } from './src/voice/playback';
+import './src/location/scheduledSender';
 import './src/location/backgroundGeofence'; // registers the background task at load
 import {
   setupNotificationChannels,
   checkAndRequestNotificationPermissions,
   showIncomingNudgeNotification,
-  showLocalNudgeNotification,
   dismissIncomingNudgeNotification,
-  syncAllNudgeAlarms,
 } from './src/notifications/localNotifications';
-import { ensureUserProfile } from './src/db/users';
+import { ensureUserProfile, subscribeUserProfile } from './src/db/users';
 import {
   syncFcmToken,
   removeFcmToken,
@@ -24,12 +28,15 @@ import { attachFcmListeners } from './src/fcm/delivery';
 import { startTriggerEngine } from './src/location/triggerEngine';
 import {
   getInitialNativeAction,
+  clearNativeAccountState,
+  flushNativeReceipts,
+  setNativeLockscreenAllowed,
   clearInitialNativeAction,
   showNativeIncomingNotification,
   recordNativeIncoming,
   addNativeActionListener,
 } from './src/notifications/nativeNotificationBridge';
-import { subscribeReceivedNudges, subscribeSentNudges, isNudgeActive, NUDGE_STATUS } from './src/db/nudges';
+import { getNudge, subscribeReceivedNudges, NUDGE_STATUS } from './src/db/nudges';
 import ErrorBoundary from './src/ui/ErrorBoundary';
 import AuthScreen from './src/ui/AuthScreen';
 import HomeScreen from './src/ui/HomeScreen';
@@ -49,17 +56,14 @@ import { recordRuntimeStatus } from './src/diagnostics/runtimeStatus';
 messaging().setBackgroundMessageHandler(async (remoteMessage) => {
   try {
     console.log('[FCM_BACKGROUND_RECEIVED] Background message handler started');
-    const data = remoteMessage?.data || {};
-    const nudgeId = data?.nudgeId;
-    const senderName = data?.senderName || 'Someone';
-    const message = data?.message || 'Incoming Nudgr';
-
-    console.log(`[FCM_RECEIVED_BACKGROUND] nudgeId=${nudgeId || 'NONE'} type=${data?.type || 'unknown'} senderName=${senderName}`);
-    await recordRuntimeStatus('FCM_RECEIVED_BACKGROUND', 'Background FCM data message received', { nudgeId });
+    const data = parseIncoming(remoteMessage?.data, getAuth().currentUser?.uid, remoteMessage?.sentTime);
+    if (!data) return;
+    const { nudgeId, senderName, message } = data;
+    await recordRuntimeStatus('FCM_RECEIVED_BACKGROUND', 'Background FCM message received', { nudgeId });
 
     if (nudgeId) {
       const nativeHandled = typeof showNativeIncomingNotification === 'function'
-        ? await showNativeIncomingNotification({ nudgeId, triggerId: data.triggerEventId || data.triggerId || '', senderName, message })
+        ? await showNativeIncomingNotification({ ...data, triggerId: data.triggerEventId })
         : null;
       if (nativeHandled !== null) {
         console.log(`[FCM_HANDLER_NATIVE] nudgeId=${nudgeId} handled=${nativeHandled}`);
@@ -84,7 +88,7 @@ messaging().setBackgroundMessageHandler(async (remoteMessage) => {
   }
 });
 
-export default function App() {
+function NudgrApp() {
   const [user, setUser] = useState(null);
   const [profile, setProfile] = useState(null);
   const [ready, setReady] = useState(false);
@@ -98,18 +102,18 @@ export default function App() {
 
   const currentRoute = navStack[navStack.length - 1] || { name: 'home' };
   const screen = currentRoute.name;
-  const detail = currentRoute.params; // { id, isReceived, autoPlay }
+  const detail = currentRoute.params;
 
   const navigate = useCallback((name, params = null) => {
     const now = Date.now();
-    if (now - lastNavTimeRef.current < 250) return; // Prevent rapid double-tap
+    if (now - lastNavTimeRef.current < 250) return;
     lastNavTimeRef.current = now;
 
     setNavStack((prev) => {
       const current = prev[prev.length - 1];
       if (current && current.name === name) {
         if (JSON.stringify(current.params || null) === JSON.stringify(params || null)) {
-          return prev; // Already on this screen with same params, do not push duplicate!
+          return prev;
         }
       }
       return [...prev, { name, params }];
@@ -117,9 +121,10 @@ export default function App() {
   }, []);
 
   const goBack = useCallback(() => {
+    lastNavTimeRef.current = 0;
     setNavStack((prev) => {
       if (prev.length <= 1) {
-        return prev; // At root, cannot pop
+        return prev;
       }
       return prev.slice(0, prev.length - 1);
     });
@@ -128,19 +133,16 @@ export default function App() {
   // Handle Android hardware back press
   useEffect(() => {
     const onBackPress = () => {
-      // 1. If incoming nudge alert overlay is active, dismiss it
       if (incomingRef.current) {
         dismissIncoming();
         return true;
       }
 
-      // 2. If navigation stack has more than 1 screen, pop back to previous screen
       if (navStackRef.current.length > 1) {
         goBack();
-        return true; // Consumed by App navigation
+        return true;
       }
 
-      // 3. At root screen ('home') -> return false for normal Android exit behavior
       return false;
     };
 
@@ -150,34 +152,54 @@ export default function App() {
   const [connections, setConnections] = useState([]);
   const [incomingNudgeId, setIncomingNudgeId] = useState(null);
 
-  const stopEngineRef = useRef(null);
-  const stopFcmRef = useRef(null);
-  const stopConnRef = useRef(null);
-  const stopRecvRef = useRef(null);
-  const stopSentAlarmSyncRef = useRef(null);
-  const refreshAttachedRef = useRef(false);
+  const sessionsRef = useRef(createSessionManager(error => console.warn('[session:cleanup]', error?.message)));
+  const pendingIncomingRef = useRef(null);
   const incomingRef = useRef(null);
   const currentUserRef = useRef(null);
   const handledTriggeredNudgesRef = useRef(new Set());
 
   const showIncoming = async (id, startAnswered = false) => {
     const nudgeId = typeof id === 'object' ? id.id : id;
+    const uid = getAuth().currentUser?.uid;
+    if (!uid) { pendingIncomingRef.current = { id: nudgeId, startAnswered }; return; }
     if (!nudgeId) return;
-    const existing = await getIncomingState(nudgeId);
-    if (!startAnswered && existing && existing.state !== INCOMING_STATES.RINGING) return;
-    if (incomingRef.current === nudgeId && !startAnswered) return;
-    incomingRef.current = nudgeId;
-    setIncomingNudgeId({ id: nudgeId, startAnswered });
+    try {
+      const nudge = await getNudge(nudgeId);
+      if (!nudge || nudge.recipientUid !== uid || getAuth().currentUser?.uid !== uid) return;
+      const existing = await getIncomingState(nudgeId);
+      const hasRecentTrigger = Boolean(nudge.lastTriggerEventId) &&
+        (nudge.status === NUDGE_STATUS.TRIGGERED || (nudge.lastTriggerExpiresAtMs && nudge.lastTriggerExpiresAtMs > Date.now()));
+      if (!hasRecentTrigger && !(startAnswered && existing?.state === INCOMING_STATES.ANSWERED)) return;
+      let triggerId = nudge.lastTriggerEventId || existing?.triggerId;
+      let expiresAt = nudge.lastTriggerExpiresAtMs || existing?.expiresAt || timestampMillis(nudge.lastTriggeredAt || nudge.triggeredAt) + DELIVERY_TTL_MS;
+      if (!triggerId || !expiresAt) {
+        const event = await getLatestTriggerEvent(nudgeId);
+        triggerId = event?.id;
+        expiresAt = timestampMillis(event?.createdAt) + DELIVERY_TTL_MS;
+      }
+      const incoming = parseIncoming({ ...nudge, nudgeId, triggerEventId: triggerId, expiresAt }, uid);
+      if (!incoming || getAuth().currentUser?.uid !== uid) return;
+      if (existing && existing.state !== INCOMING_STATES.RINGING && !(startAnswered && existing.state === INCOMING_STATES.ANSWERED)) return;
+      await recordNativeIncoming(nudgeId, triggerId, incoming.senderName, uid, expiresAt);
+      await showNativeIncomingNotification({ ...incoming, triggerId });
+      if (getAuth().currentUser?.uid !== uid) return;
+      if (incomingRef.current?.id === nudgeId && incomingRef.current?.triggerId === triggerId && !startAnswered) return;
+      incomingRef.current = { id: nudgeId, triggerId };
+      setIncomingNudgeId({ id: nudgeId, triggerId, startAnswered });
+    } catch (error) { console.warn('[incoming:lookup]', error?.code || 'unavailable'); }
   };
 
-  const dismissIncoming = (nudgeId = incomingRef.current) => {
+  const dismissIncoming = (nudgeId = null, triggerId = null) => {
+    const activeId = incomingRef.current?.id;
+    if (nudgeId && nudgeId !== activeId) return;
+    if (triggerId && triggerId !== incomingRef.current?.triggerId) return;
     incomingRef.current = null;
     setIncomingNudgeId(null);
-    dismissIncomingNudgeNotification(nudgeId);
+    setNativeLockscreenAllowed(false);
+    dismissIncomingNudgeNotification(nudgeId || activeId);
   };
 
   const handleAnswerAction = (nudgeId) => {
-    // When notification ANSWER action is pressed, open full-screen incoming experience in answered mode
     showIncoming(nudgeId, true);
   };
 
@@ -189,11 +211,10 @@ export default function App() {
       console.log('[NOTIFICATION_DEBUG] App init notification permission result:', JSON.stringify(res));
     });
 
-    // Handle user tapping on a local notification
     const handleNotificationResponse = (response) => {
       const data = response?.notification?.request?.content?.data;
       console.log('[NOTIFICATION_DEBUG] User interacted with notification:', JSON.stringify(data));
-      
+
       if (data?.test) {
         console.log('[NOTIFICATION_DEBUG] Tapped test notification');
         return;
@@ -201,7 +222,7 @@ export default function App() {
 
       const nudgeId = data?.nudgeId;
       const actionId = data?.action?.split('.').pop() || response?.actionIdentifier;
-      
+
       if (nudgeId) {
         console.log(`[FCM_NOTIFICATION_ACTION] nudgeId=${nudgeId} actionId=${actionId || 'DEFAULT_TAP'}`);
         if (actionId === 'ANSWER' || data?.startAnswered) {
@@ -211,19 +232,16 @@ export default function App() {
           handledTriggeredNudgesRef.current.add(nudgeId);
           dismissIncoming(nudgeId);
         } else if (data?.type === 'nudge_incoming' || actionId === 'OPEN') {
-          // A tap on the call-style local notification returns the recipient
-          // to IncomingNudge, not the ordinary Nudgr detail screen.
           showIncoming(nudgeId);
         } else {
           dismissIncoming();
-          navigate('detail', { id: nudgeId, isReceived: true });
+          navigate('detail', { id: nudgeId, isReceived: data?.isReceived !== false });
         }
       }
     };
 
     const responseSub = Notifications.addNotificationResponseReceivedListener(handleNotificationResponse);
 
-    // Also check for cold-start interaction with local notification
     Notifications.getLastNotificationResponseAsync()
       .then((response) => {
         if (response) {
@@ -235,7 +253,6 @@ export default function App() {
         console.warn('[NOTIFICATION_DEBUG] getLastNotificationResponseAsync error:', e?.message || e);
       });
 
-    // Check for active ringing state on app start (restore after restart)
     const restoreState = async () => {
       const active = await getActiveRingingState();
       if (active) {
@@ -245,7 +262,6 @@ export default function App() {
     };
     restoreState();
 
-    // Check if app was opened from killed state by FCM
     messaging().getInitialNotification().then((remoteMessage) => {
       if (remoteMessage?.data?.nudgeId) {
         console.log('[NOTIFICATION_DEBUG] Cold start from FCM notification:', remoteMessage.data);
@@ -253,7 +269,6 @@ export default function App() {
       }
     });
 
-    // Handle notification tap when app is in background
     const bgNotificationSub = messaging().onNotificationOpenedApp((remoteMessage) => {
       if (remoteMessage?.data?.nudgeId) {
         console.log('[NOTIFICATION_DEBUG] Opened app from background via FCM:', remoteMessage.data);
@@ -261,7 +276,6 @@ export default function App() {
       }
     });
 
-    // Handle native Android notification actions (ANSWER, DECLINE, OPEN)
     const handleNativeAction = (event) => {
       if (!event || !event.nudgeId) return;
       const { nudgeId, startAnswered } = event;
@@ -280,7 +294,6 @@ export default function App() {
 
     const nativeActionSub = addNativeActionListener(handleNativeAction);
 
-    // Check for cold start from native notification action (e.g. Answer pressed on lock screen / killed state)
     getInitialNativeAction().then((initial) => {
       if (initial && initial.nudgeId) {
         console.log('[NOTIFICATION_DEBUG] Cold start from native notification action:', JSON.stringify(initial));
@@ -296,125 +309,84 @@ export default function App() {
     };
   }, []);
 
-  // Auth state drives the whole app.
+  // A session owns all listeners; delayed initialization cannot revive an old account.
   useEffect(() => {
-    const unsub = getAuth().onAuthStateChanged(async (firebaseUser) => {
-      if (firebaseUser) {
-        currentUserRef.current = firebaseUser;
-        setUser(firebaseUser);
-        AsyncStorage.setItem('nudgr_active_uid', firebaseUser.uid).catch(() => {});
-        try {
-          const p = await ensureUserProfile(firebaseUser);
-          setProfile(p);
-          await syncFcmToken(firebaseUser);
-        } catch (e) {
-          if (__DEV__) console.warn('[profile]', e.message);
-        }
-        if (!refreshAttachedRef.current) {
-          attachFcmTokenRefresh();
-          refreshAttachedRef.current = true;
-        }
-        checkAndRequestNotificationPermissions();
-        startSession(firebaseUser.uid);
-      } else {
-        endSession();
-        setUser(null);
-        setProfile(null);
+    const unsub = getAuth().onAuthStateChanged(async firebaseUser => {
+      const previousUid = currentUserRef.current?.uid;
+      const scope = sessionsRef.current.begin(firebaseUser?.uid || null);
+      currentUserRef.current = firebaseUser;
+      handledTriggeredNudgesRef.current.clear();
+      setConnections([]); setProfile(null); setNavStack([{ name: 'home' }]);
+      setUser(firebaseUser); setReady(false);
+      if (previousUid && previousUid !== firebaseUser?.uid) {
+        pendingIncomingRef.current = null;
+        dismissIncoming();
+        clearNativeAccountState();
+        stopNudgeMessage().catch(() => {});
       }
+      if (!firebaseUser) {
+        await AsyncStorage.removeItem('nudgr_active_uid').catch(() => {});
+        if (scope.isCurrent()) setReady(true);
+        return;
+      }
+      const uid = firebaseUser.uid;
+      await AsyncStorage.setItem('nudgr_active_uid', uid).catch(() => {});
+      if (!scope.isCurrent()) return;
+      if (!scope.isCurrent() || getAuth().currentUser?.uid !== uid) return;
+      ensureUserProfile(firebaseUser).catch(error => { if (__DEV__) console.warn('[profile]', error.code); });
+      syncFcmToken(firebaseUser).catch(error => { if (__DEV__) console.warn('[token]', error.code); });
+      scope.addCleanup(attachFcmTokenRefresh());
+      flushNativeReceipts();
+      startSession(uid, scope);
       setReady(true);
+      const pending = pendingIncomingRef.current;
+      pendingIncomingRef.current = null;
+      if (pending) showIncoming(pending.id, pending.startAnswered);
+      const initial = await getInitialNativeAction();
+      if (scope.isCurrent() && initial?.nudgeId) {
+        await showIncoming(initial.nudgeId, initial.startAnswered);
+        clearInitialNativeAction();
+      }
     });
-    return () => unsub();
+    return () => { unsub(); sessionsRef.current.invalidate(); };
   }, []);
 
-  const startSession = (uid) => {
-    // Sender's geofencing engine (triggers when sender enters radius).
-    stopEngineRef.current = startTriggerEngine({ uid });
-
-    // Sync exact time alarms for all sent nudges with Android notification scheduler
-    stopSentAlarmSyncRef.current = subscribeSentNudges(uid, (nudges) => {
-      syncAllNudgeAlarms(nudges, isNudgeActive);
-    });
-
-    // Recipient-side listening for triggered Nudgrs in foreground.
-    stopRecvRef.current = subscribeReceivedNudges(uid, (list) => {
-      console.log(`[NUDGR_DELIVERY] recipientUid=${uid} receivedSnapshotCount=${list.length}`);
-      const triggeredList = list.filter((n) => n.status === NUDGE_STATUS.TRIGGERED);
-      console.log(`[NUDGR_DELIVERY] recipientUid=${uid} triggeredSnapshotCount=${triggeredList.length}`);
-
-      for (const triggered of triggeredList) {
-        if (handledTriggeredNudgesRef.current.has(triggered.id)) {
-          continue; // Already dispatched notification for this triggered nudge
-        }
-        handledTriggeredNudgesRef.current.add(triggered.id);
-
-        console.log(`[NUDGR_DELIVERY] nudgeId=${triggered.id} senderUid=${triggered.senderUid} recipientUid=${uid} source=firestore`);
-        recordRuntimeStatus('RECEIVER_FIRESTORE', 'Recipient received triggered Nudgr from Firestore', { nudgeId: triggered.id });
-
-        showIncoming(triggered.id);
-
-        showIncomingNudgeNotification({
-          nudgeId: triggered.id,
-          senderName: triggered.senderName || 'Someone',
-          message: triggered.message || 'Incoming Nudgr',
-        })
-          .then((notifId) => {
-            console.log(`[NUDGR_NOTIFICATION] nudgeId=${triggered.id} source=firestore notificationId=${notifId || 'deduplicated'}`);
-          })
-          .catch((e) => {
-            console.error(`[NUDGR_NOTIFICATION] nudgeId=${triggered.id} source=firestore result=FAILED error=${e.message}`);
-          });
+  const startSession = (uid, scope) => {
+    const current = () => scope.isCurrent() && getAuth().currentUser?.uid === uid;
+    scope.addCleanup(subscribeUserProfile(uid, value => { if (current()) setProfile(value); }));
+    scope.addCleanup(startTriggerEngine({ uid }));
+    scope.addCleanup(subscribeReceivedNudges(uid, list => {
+      if (!current()) return;
+      const nowMs = Date.now();
+      for (const nudge of list) {
+        const isActiveRing =
+          nudge.status === NUDGE_STATUS.TRIGGERED ||
+          (Boolean(nudge.lastTriggerEventId) && nudge.lastTriggerExpiresAtMs && nudge.lastTriggerExpiresAtMs > nowMs);
+        if (!isActiveRing) continue;
+        const key = `${nudge.id}:${nudge.lastTriggerEventId || timestampMillis(nudge.lastTriggeredAt)}`;
+        if (handledTriggeredNudgesRef.current.has(key)) continue;
+        handledTriggeredNudgesRef.current.add(key);
+        showIncoming(nudge.id);
       }
-    });
-
-    // FCM messaging listeners (preserved for push delivery).
-    stopFcmRef.current = attachFcmListeners({
+    }));
+    scope.addCleanup(attachFcmListeners({
       onNudgeMessage: async (nudgeId, info) => {
-        if (!nudgeId) return;
-        const newTrigger = await recordNativeIncoming(nudgeId, info?.data?.triggerEventId || '', info?.senderName || 'Someone');
-        if (newTrigger) handledTriggeredNudgesRef.current.delete(nudgeId);
-        if (!nudgeId || handledTriggeredNudgesRef.current.has(nudgeId)) return;
-        handledTriggeredNudgesRef.current.add(nudgeId);
-        console.log(`[NUDGR_DELIVERY] nudgeId=${nudgeId} recipientUid=${uid} source=fcm-foreground`);
-        recordRuntimeStatus('FCM_RECEIVED_FOREGROUND', 'Foreground FCM data message received', { nudgeId });
-        showIncoming(nudgeId);
-        showIncomingNudgeNotification({
-          nudgeId,
-          senderName: info?.senderName || 'Someone',
-          message: info?.message || 'Incoming Nudgr',
-        }).catch((e) => console.error(`[NUDGR_NOTIFICATION] nudgeId=${nudgeId} source=fcm-foreground result=FAILED error=${e.message}`));
-      },
-      onNudgeOpened: (nudgeId) => {
-        console.log('[NOTIFICATION_DEBUG] FCM message opened for nudge:', nudgeId);
+        if (!current()) return;
+        const incoming = parseIncoming(info?.data, uid, info?.sentTime);
+        if (!incoming) return;
+        try { await recordNativeIncoming(nudgeId, incoming.triggerEventId, incoming.senderName, uid, incoming.expiresAt); }
+        catch (_) { return; }
+        if (!current()) return;
         showIncoming(nudgeId);
       },
-    });
-
-    // Keep live connections for recipient picker + home display.
+      onNudgeOpened: (nudgeId, info) => {
+        if (current() && parseIncoming(info?.data, uid, info?.sentTime)) showIncoming(nudgeId);
+      },
+    }));
     import('./src/db/connections').then(({ subscribeConnections }) => {
-      stopConnRef.current = subscribeConnections(uid, setConnections, () => {});
+      if (!current()) return;
+      scope.addCleanup(subscribeConnections(uid, list => { if (current()) setConnections(list); }, () => {}));
     });
-  };
-
-  const endSession = () => {
-    if (stopEngineRef.current) stopEngineRef.current();
-    if (stopFcmRef.current) stopFcmRef.current();
-    if (stopConnRef.current) stopConnRef.current();
-    if (stopRecvRef.current) stopRecvRef.current();
-    if (stopSentAlarmSyncRef.current) stopSentAlarmSyncRef.current();
-    stopEngineRef.current = null;
-    stopFcmRef.current = null;
-    stopConnRef.current = null;
-    stopRecvRef.current = null;
-    stopSentAlarmSyncRef.current = null;
-    handledTriggeredNudgesRef.current.clear();
-    AsyncStorage.removeItem('nudgr_active_uid').catch(() => {});
-    if (currentUserRef.current) {
-      removeFcmToken(currentUserRef.current);
-      currentUserRef.current = null;
-    }
-    setNavStack([{ name: 'home' }]);
-    dismissIncoming();
-    setConnections([]);
   };
 
   const openIncoming = (nudgeId) => {
@@ -424,8 +396,13 @@ export default function App() {
 
   if (!ready) {
     return (
-      <SafeAreaView style={styles.center}>
-        <ActivityIndicator size="large" color="#16a34a" />
+      <SafeAreaView edges={['top', 'bottom', 'left', 'right']} style={styles.center}>
+        <StatusBar barStyle="dark-content" backgroundColor="#F6F7FC" translucent={false} />
+        <View style={styles.loadingLogoBox}>
+          <Text style={styles.loadingLogoText}>N</Text>
+        </View>
+        <ActivityIndicator size="small" color="#6366F1" style={{ marginTop: 24 }} />
+        <Text style={styles.loadingLabel}>Nudgr</Text>
       </SafeAreaView>
     );
   }
@@ -436,6 +413,10 @@ export default function App() {
 
   const handleSignOut = async () => {
     try {
+      let timeout;
+      try {
+        await Promise.race([removeFcmToken(getAuth().currentUser), new Promise(resolve => { timeout = setTimeout(resolve, 3000); })]);
+      } finally { clearTimeout(timeout); }
       await getAuth().signOut();
     } catch (e) {
       if (__DEV__) console.warn('[sign-out]', e.message);
@@ -443,8 +424,8 @@ export default function App() {
   };
 
   return (
-    <SafeAreaView style={styles.container}>
-      <StatusBar barStyle="light-content" backgroundColor="#070A12" translucent={false} />
+    <SafeAreaView edges={['top', 'bottom', 'left', 'right']} key={user.uid} style={styles.container}>
+      <StatusBar barStyle="dark-content" backgroundColor="#F6F7FC" translucent={false} />
       {screen === 'home' && (
         <HomeScreen
           uid={user.uid}
@@ -480,10 +461,11 @@ export default function App() {
       {screen === 'create' && (
         <CreateNudgeScreen
           connections={connections}
+          initialNudge={detail?.initialNudge || null}
           onBack={goBack}
           onCreated={(id) => {
             setNavStack((prev) => {
-              const filtered = prev.filter((r) => r.name !== 'create');
+              const filtered = prev.filter((r) => r.name !== 'create' && !(r.name === 'detail' && r.params?.id === id));
               return [...filtered, { name: 'detail', params: { id, isReceived: false } }];
             });
           }}
@@ -505,15 +487,17 @@ export default function App() {
           nudgeId={detail.id}
           isReceived={detail.isReceived}
           autoPlay={!!detail.autoPlay}
+          onEdit={(nudgeData) => navigate('create', { initialNudge: nudgeData })}
           onBack={goBack}
         />
       )}
 
       {incomingNudgeId && (
         <IncomingNudge
+          key={`${user.uid}:${incomingNudgeId.id}:${incomingNudgeId.triggerId}`}
           nudgeId={incomingNudgeId.id || incomingNudgeId}
           startAnswered={!!incomingNudgeId.startAnswered}
-          onDismiss={dismissIncoming}
+          onDismiss={() => dismissIncoming(incomingNudgeId.id, incomingNudgeId.triggerId)}
           onAnswer={openIncoming}
         />
       )}
@@ -522,14 +506,50 @@ export default function App() {
 }
 
 const styles = StyleSheet.create({
-  center: { flex: 1, justifyContent: 'center', alignItems: 'center', backgroundColor: '#070A12' },
-  container: { flex: 1, backgroundColor: '#070A12' },
+  center: {
+    flex: 1,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: '#F6F7FC',
+  },
+  loadingLogoBox: {
+    width: 68,
+    height: 68,
+    borderRadius: 22,
+    backgroundColor: '#6366F1',
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: '#6366F1',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.35,
+    shadowRadius: 16,
+    elevation: 8,
+  },
+  loadingLogoText: {
+    fontSize: 32,
+    fontWeight: '900',
+    color: '#ffffff',
+    letterSpacing: -1,
+  },
+  loadingLabel: {
+    marginTop: 12,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#64748B',
+    letterSpacing: 1.5,
+    textTransform: 'uppercase',
+  },
+  container: { flex: 1, backgroundColor: '#F6F7FC' },
 });
 
-const AppRoot = () => (
-  <ErrorBoundary>
-    <App />
-  </ErrorBoundary>
-);
-
-registerRootComponent(AppRoot);
+export default function App() {
+  return (
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <SafeAreaProvider>
+        <ErrorBoundary>
+          <NudgrApp />
+        </ErrorBoundary>
+      </SafeAreaProvider>
+    </GestureHandlerRootView>
+  );
+}

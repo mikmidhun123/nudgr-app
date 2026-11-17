@@ -1,4 +1,9 @@
 {
+  "react-native": {
+    "crashlytics_auto_collection_enabled": false,
+    "crashlytics_debug_enabled": false,
+    "crashlytics_ndk_enabled": true
+  },
   "functions": {
     "source": "functions"
   },

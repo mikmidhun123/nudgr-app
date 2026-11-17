@@ -5,47 +5,49 @@ import android.content.res.Configuration
 
 import com.facebook.react.PackageList
 import com.facebook.react.ReactApplication
-import com.facebook.react.ReactNativeHost
+import com.facebook.react.ReactNativeApplicationEntryPoint.loadReactNative
 import com.facebook.react.ReactPackage
 import com.facebook.react.ReactHost
-import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint.load
-import com.facebook.react.defaults.DefaultReactNativeHost
-import com.facebook.react.soloader.OpenSourceMergedSoMapping
-import com.facebook.soloader.SoLoader
+import com.facebook.react.common.ReleaseLevel
+import com.facebook.react.defaults.DefaultNewArchitectureEntryPoint
 
 import expo.modules.ApplicationLifecycleDispatcher
-import expo.modules.ReactNativeHostWrapper
+import expo.modules.ExpoReactHostFactory
 
 class MainApplication : Application(), ReactApplication {
 
-  override val reactNativeHost: ReactNativeHost = ReactNativeHostWrapper(
-        this,
-        object : DefaultReactNativeHost(this) {
-          override fun getPackages(): List<ReactPackage> {
-            val packages = PackageList(this).packages.toMutableList()
-            packages.add(NudgrNativePackage())
-            return packages
-          }
-
-          override fun getJSMainModuleName(): String = ".expo/.virtual-metro-entry"
-
-          override fun getUseDeveloperSupport(): Boolean = BuildConfig.DEBUG
-
-          override val isNewArchEnabled: Boolean = BuildConfig.IS_NEW_ARCHITECTURE_ENABLED
-          override val isHermesEnabled: Boolean = BuildConfig.IS_HERMES_ENABLED
-      }
-  )
-
-  override val reactHost: ReactHost
-    get() = ReactNativeHostWrapper.createReactHost(applicationContext, reactNativeHost)
+  override val reactHost: ReactHost by lazy {
+    ExpoReactHostFactory.getDefaultReactHost(
+      context = applicationContext,
+      useDevSupport = BuildConfig.DEBUG && !BuildConfig.NUDGR_QA_BUILD,
+      packageList =
+        PackageList(this).packages.apply {
+          add(NudgrNativePackage())
+        }
+    )
+  }
 
   override fun onCreate() {
     super.onCreate()
-    SoLoader.init(this, OpenSourceMergedSoMapping)
-    if (BuildConfig.IS_NEW_ARCHITECTURE_ENABLED) {
-      // If you opted-in for the New Architecture, we load the native entry point for this app.
-      load()
+    if (BuildConfig.NUDGR_QA_BUILD) {
+      // QA uses a local backend and memory cache, keeping production's disk cache untouched.
+      com.google.firebase.firestore.FirebaseFirestore.getInstance().firestoreSettings =
+        com.google.firebase.firestore.FirebaseFirestoreSettings.Builder()
+          .setHost("127.0.0.1:8088").setSslEnabled(false).setPersistenceEnabled(false).build()
+      if (BuildConfig.NUDGR_CI_AUTH) com.google.firebase.auth.FirebaseAuth.getInstance().useEmulator("127.0.0.1", 9099)
     }
+    com.google.firebase.messaging.FirebaseMessaging.getInstance().isAutoInitEnabled = !BuildConfig.NUDGR_CI_AUTH
+    val crashReporting = BuildConfig.NUDGR_CRASH_REPORTING && !BuildConfig.DEBUG && !BuildConfig.NUDGR_QA_BUILD
+    io.invertase.firebase.common.ReactNativeFirebasePreferences.getSharedInstance()
+      .setBooleanValue("crashlytics_auto_collection_enabled", crashReporting)
+    com.google.firebase.crashlytics.FirebaseCrashlytics.getInstance().setCrashlyticsCollectionEnabled(crashReporting)
+    if (BuildConfig.NUDGR_QA_BUILD) com.google.firebase.crashlytics.FirebaseCrashlytics.getInstance().deleteUnsentReports()
+    DefaultNewArchitectureEntryPoint.releaseLevel = try {
+      ReleaseLevel.valueOf(BuildConfig.REACT_NATIVE_RELEASE_LEVEL.uppercase())
+    } catch (e: IllegalArgumentException) {
+      ReleaseLevel.STABLE
+    }
+    loadReactNative(this)
     ApplicationLifecycleDispatcher.onApplicationCreate(this)
   }
 

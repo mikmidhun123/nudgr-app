@@ -16,16 +16,43 @@ import {
   subscribeSentNudges,
   subscribeReceivedNudges,
   setNudgeEnabled,
+  deleteNudge,
+  hideReceivedNudge,
   isNudgeActive,
   getNudgeStateSummary,
   NUDGE_DISABLE_MODE,
+  NUDGE_REPEAT_MODE,
 } from '../db/nudges';
-import { THEME } from './theme';
+import { removeDeletedNudgeFromGeofenceCache } from '../location/backgroundGeofence';
+import { removeNudgeFromOutbox } from '../location/triggerOutbox';
+import { cancelNudgeAlarm } from '../notifications/localNotifications';
+import SwipeableNudgeCard from './SwipeableNudgeCard';
+import AmbientBackground from './AmbientBackground';
+
+const SHORT_DAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
+
+function formatDaysTag(days) {
+  if (!Array.isArray(days) || days.length === 0 || days.length === 7) return null;
+  const sorted = [...days].sort();
+  if (sorted.join(',') === '1,2,3,4,5') return 'Weekdays';
+  if (sorted.join(',') === '0,6') return 'Weekends';
+  return sorted.map((d) => SHORT_DAYS[d]).filter(Boolean).join(', ');
+}
+
+function formatRepeatTag(nudge) {
+  const mode = nudge?.repeatMode || NUDGE_REPEAT_MODE.ONCE;
+  if (mode === NUDGE_REPEAT_MODE.ONCE_PER_DAY) return '1× / day';
+  if (mode === NUDGE_REPEAT_MODE.MULTIPLE_PER_DAY) {
+    return `Multi · ${nudge?.cooldownMinutes || 30}m`;
+  }
+  return 'Once';
+}
 
 export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
   const [sent, setSent] = useState([]);
   const [received, setReceived] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState(null);
 
   // Turn-off Modal State
   const [selectedNudgeForDisable, setSelectedNudgeForDisable] = useState(null);
@@ -46,13 +73,15 @@ export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
     };
   }, [uid]);
 
+  const visibleReceived = received.filter(
+    (n) => !n.recipientHidden && n.disableMode !== 'recipient_hidden'
+  );
+
   const handleToggle = async (nudge, newValue) => {
     if (!newValue) {
-      // User is turning OFF an active Nudgr -> Show choice dialog
       setSelectedNudgeForDisable(nudge);
       setDisableModalVisible(true);
     } else {
-      // User is turning ON a disabled Nudgr -> Turn ON immediately
       try {
         await setNudgeEnabled(nudge.id, true);
       } catch (e) {
@@ -80,106 +109,223 @@ export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
     setSelectedNudgeForDisable(null);
   };
 
+  const handleSwipeSentDelete = (nudge) => {
+    const hasVoice = Boolean(nudge?.voiceNote?.storageKey);
+    Alert.alert(
+      'Delete this Nudgr?',
+      hasVoice
+        ? 'This permanently deletes this location alarm and removes its recorded voice note from Cloudflare R2.'
+        : 'This permanently deletes this location alarm and its delivery history.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            setDeletingId(nudge.id);
+            try {
+              await deleteNudge(nudge.id);
+              await Promise.all([
+                removeDeletedNudgeFromGeofenceCache(nudge.id),
+                removeNudgeFromOutbox(nudge.id),
+                cancelNudgeAlarm(nudge.id),
+              ]);
+            } catch (e) {
+              Alert.alert('Could not delete Nudgr', e.message || 'Please try again.');
+            } finally {
+              setDeletingId(null);
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleSwipeReceivedHide = async (nudge) => {
+    try {
+      await hideReceivedNudge(nudge.id);
+    } catch (e) {
+      Alert.alert('Could not hide Nudgr', e.message || 'Please try again.');
+    }
+  };
+
   const renderNudge = (n, isReceived) => {
     const isActive = isNudgeActive(n);
     const summary = getNudgeStateSummary(n);
     const personName = isReceived ? (n.senderName || 'Someone') : (n.recipientName || 'Someone');
+    const personInitial = personName[0].toUpperCase();
+    const daysText = formatDaysTag(n.schedule?.daysOfWeek);
+    const repeatText = formatRepeatTag(n);
+    const isDeleting = deletingId === n.id;
 
     return (
-      <TouchableOpacity
+      <SwipeableNudgeCard
         key={n.id}
-        style={[styles.tileCard, !isActive && styles.tileCardDisabled]}
-        onPress={() => onOpenNudge(n.id, isReceived)}
-        activeOpacity={0.85}
+        isReceived={isReceived}
+        disabled={isDeleting}
+        onSwipeRightAction={() =>
+          isReceived ? handleSwipeReceivedHide(n) : handleSwipeSentDelete(n)
+        }
       >
-        {/* Visual Hierarchy 1: Sender / Recipient & Switch */}
-        <View style={styles.tileHeader}>
-          <View style={styles.personRow}>
-            <View style={[styles.avatarDot, { backgroundColor: isReceived ? 'rgba(90, 200, 250, 0.25)' : 'rgba(139, 124, 255, 0.25)' }]}>
-              <Text style={styles.avatarDotText}>
-                {personName[0].toUpperCase()}
-              </Text>
+        <TouchableOpacity
+          style={[styles.tileCard, !isActive && styles.tileCardDisabled]}
+          onPress={() => onOpenNudge(n.id, isReceived)}
+          disabled={isDeleting}
+          activeOpacity={0.85}
+        >
+          {/* ── Tile Top Row ── */}
+          <View style={styles.tileHeader}>
+            <View style={styles.personRow}>
+              <View
+                style={[
+                  styles.avatarCircle,
+                  { backgroundColor: isReceived ? '#ECFDF5' : '#EEF2FF' },
+                  { borderColor: isReceived ? 'rgba(167, 243, 208, 0.85)' : '#C7D2FE' },
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.avatarInitial,
+                    { color: isReceived ? '#059669' : '#6366F1' },
+                  ]}
+                >
+                  {personInitial}
+                </Text>
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.personDirection}>
+                  {isReceived ? 'FROM' : 'TO'}
+                </Text>
+                <Text style={[styles.personName, !isActive && styles.textMuted]} numberOfLines={1}>
+                  {personName}
+                </Text>
+                {n.title ? (
+                  <Text style={styles.alarmTitleText} numberOfLines={1}>
+                    {n.title}
+                  </Text>
+                ) : null}
+              </View>
             </View>
-            <View>
-              <Text style={styles.personDirection}>
-                {isReceived ? 'RECEIVED FROM' : 'SENT TO'}
-              </Text>
-              <Text style={[styles.personName, !isActive && styles.textDisabled]}>
-                {personName}
-              </Text>
+
+            {/* Toggle Switch */}
+            <View style={styles.switchWrapper}>
+              {isDeleting ? (
+                <ActivityIndicator size="small" color="#EF4444" />
+              ) : (
+                <>
+                  <Text
+                    style={[
+                      styles.switchLabel,
+                      isActive ? styles.switchLabelOn : styles.switchLabelOff,
+                    ]}
+                  >
+                    {isActive ? 'ON' : 'OFF'}
+                  </Text>
+                  <Switch
+                    value={isActive}
+                    onValueChange={(val) => handleToggle(n, val)}
+                    trackColor={{ false: '#E2E8F0', true: '#C7D2FE' }}
+                    thumbColor={isActive ? '#6366F1' : '#94A3B8'}
+                    ios_backgroundColor="#E2E8F0"
+                    style={styles.switchStyle}
+                  />
+                </>
+              )}
             </View>
           </View>
 
-          {/* Switch Control */}
-          <View style={styles.switchWrapper}>
-            <Text style={[styles.switchLabel, isActive ? styles.switchOn : styles.switchOff]}>
-              {isActive ? 'ON' : 'OFF'}
+          {/* ── Message Preview ── */}
+          <View style={styles.messageBox}>
+            <Text style={[styles.messageText, !isActive && styles.textMuted]} numberOfLines={2}>
+              "{n.message}"
             </Text>
-            <Switch
-              value={isActive}
-              onValueChange={(val) => handleToggle(n, val)}
-              trackColor={{ false: 'rgba(255,255,255,0.15)', true: 'rgba(139, 124, 255, 0.45)' }}
-              thumbColor={isActive ? THEME.colors.accentPrimary : '#94a3b8'}
-              ios_backgroundColor="rgba(255,255,255,0.15)"
-              style={styles.switchStyle}
-            />
           </View>
-        </View>
 
-        {/* Visual Hierarchy 2: Message preview */}
-        <View style={styles.messageBox}>
-          <Text style={[styles.messageText, !isActive && styles.textDisabled]} numberOfLines={2}>
-            "{n.message}"
-          </Text>
-        </View>
+          {/* ── Footer Tags ── */}
+          <View style={styles.tileFooter}>
+            <View style={styles.tagRow}>
+              {n.triggerLabel && (
+                <View style={styles.tag}>
+                  <Text style={styles.tagText} numberOfLines={1}>
+                    📍 {n.triggerLabel} ({n.radiusKm?.toFixed(1)} km)
+                  </Text>
+                </View>
+              )}
+              {!n.triggerLabel && (
+                <View style={styles.tag}>
+                  <Text style={styles.tagText}>{n.radiusKm?.toFixed(1)} km</Text>
+                </View>
+              )}
 
-        {/* Visual Hierarchy 3 & 4: Location, Schedule & Status Badges */}
-        <View style={styles.tileFooter}>
-          <View style={styles.tagRow}>
-            <View style={styles.locationTag}>
-              <Text style={styles.locationTagText}>
-                📍 {n.radiusKm?.toFixed(1)} km
-              </Text>
+              <View style={[styles.tag, styles.tagPurple]}>
+                <Text style={[styles.tagText, { color: '#6366F1' }]}>{repeatText}</Text>
+              </View>
+
+              {daysText && (
+                <View style={[styles.tag, styles.tagPurple]}>
+                  <Text style={[styles.tagText, { color: '#6366F1' }]}>{daysText}</Text>
+                </View>
+              )}
+
+              {n.schedule?.afterTimeText && (
+                <View style={[styles.tag, styles.tagPurple]}>
+                  <Text style={[styles.tagText, { color: '#6366F1' }]}>
+                    {n.schedule.endHour != null
+                      ? n.schedule.afterTimeText
+                      : `After ${n.schedule.afterTimeText}`}
+                  </Text>
+                </View>
+              )}
+
+              {n.voiceNote?.storageKey ? (
+                <View style={[styles.tag, styles.tagTeal]}>
+                  <Text style={[styles.tagText, { color: '#059669' }]}>🎙️ Voice</Text>
+                </View>
+              ) : (
+                n.voiceStyle &&
+                n.voiceStyle !== 'none' && (
+                  <View style={[styles.tag, styles.tagTeal]}>
+                    <Text style={[styles.tagText, { color: '#059669' }]}>{n.voiceStyle}</Text>
+                  </View>
+                )
+              )}
             </View>
 
-            {n.schedule?.afterTimeText && (
-              <View style={styles.scheduleTag}>
-                <Text style={styles.scheduleTagText}>
-                  ⏰ After {n.schedule.afterTimeText}
+            {summary.secondaryText && (
+              <View
+                style={[
+                  styles.statusPill,
+                  isActive ? styles.statusPillActive : styles.statusPillPaused,
+                ]}
+              >
+                <Text
+                  style={[
+                    styles.statusPillText,
+                    isActive ? styles.statusTextActive : styles.statusTextPaused,
+                  ]}
+                >
+                  {summary.secondaryText}
                 </Text>
               </View>
             )}
-
-            {n.voiceStyle && n.voiceStyle !== 'none' && (
-              <View style={styles.voiceTag}>
-                <Text style={styles.voiceTagText}>🎙️ {n.voiceStyle}</Text>
-              </View>
-            )}
           </View>
-
-          {summary.secondaryText && (
-            <View style={[styles.statusBadge, isActive ? styles.badgeActive : styles.badgePaused]}>
-              <Text style={[styles.statusBadgeText, isActive ? styles.badgeTextActive : styles.badgeTextPaused]}>
-                {summary.secondaryText}
-              </Text>
-            </View>
-          )}
-        </View>
-      </TouchableOpacity>
+        </TouchableOpacity>
+      </SwipeableNudgeCard>
     );
   };
 
   return (
     <View style={styles.screen}>
-      <StatusBar barStyle="light-content" backgroundColor={THEME.colors.bg} />
+      <StatusBar barStyle="dark-content" backgroundColor="#F6F7FC" />
+      <AmbientBackground />
 
-      {/* Header */}
+      {/* ── Header ── */}
       <View style={styles.header}>
         <TouchableOpacity
           onPress={onBack}
           style={styles.backBtn}
           activeOpacity={0.7}
-          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
         >
           <Text style={styles.backArrow}>‹</Text>
         </TouchableOpacity>
@@ -197,29 +343,46 @@ export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
         <View style={styles.topSection}>
           <Text style={styles.pageTitle}>My Nudgrs</Text>
           <Text style={styles.pageSubtitle}>
-            Active arrival alarms & reminders. Toggle anytime to pause.
+            Slide a Nudgr left-to-right to delete (sent) or hide (received). Toggle anytime to pause.
           </Text>
         </View>
 
-        {loading && <ActivityIndicator size="large" color={THEME.colors.accentPrimary} style={{ marginVertical: 24 }} />}
-
-        {/* Received Nudgrs */}
-        {received.length > 0 && (
-          <View style={styles.section}>
-            <Text style={styles.sectionHeader}>RECEIVED NUDGRS ({received.length})</Text>
-            {received.map((n) => renderNudge(n, true))}
+        {loading && (
+          <View style={styles.loadingContainer}>
+            <ActivityIndicator size="small" color="#6366F1" />
+            <Text style={styles.loadingText}>Loading nudgrs…</Text>
           </View>
         )}
 
-        {/* Sent Nudgrs */}
+        {/* ── Received Section ── */}
+        {visibleReceived.length > 0 && (
+          <View style={styles.section}>
+            <View style={styles.sectionRow}>
+              <View style={[styles.sectionDot, { backgroundColor: '#10B981' }]} />
+              <Text style={styles.sectionHeader}>
+                RECEIVED ({visibleReceived.length})
+              </Text>
+            </View>
+            {visibleReceived.map((n) => renderNudge(n, true))}
+          </View>
+        )}
+
+        {/* ── Sent Section ── */}
         <View style={styles.section}>
-          <Text style={styles.sectionHeader}>SENT NUDGRS ({sent.length})</Text>
+          <View style={styles.sectionRow}>
+            <View style={[styles.sectionDot, { backgroundColor: '#6366F1' }]} />
+            <Text style={styles.sectionHeader}>
+              SENT ({sent.length})
+            </Text>
+          </View>
           {sent.length === 0 ? (
             <View style={styles.emptyCard}>
-              <Text style={styles.emptyIcon}>✉️</Text>
+              <View style={styles.emptyIconBox}>
+                <Text style={styles.emptyIconGlyph}>✉</Text>
+              </View>
               <Text style={styles.emptyTitle}>No Nudgrs sent yet</Text>
               <Text style={styles.emptySubtext}>
-                Create a Nudgr from the home screen to schedule an arrival reminder.
+                Create a Nudgr from the home screen to schedule a location arrival alarm.
               </Text>
             </View>
           ) : (
@@ -230,7 +393,7 @@ export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
         <View style={{ height: 40 }} />
       </ScrollView>
 
-      {/* Turn-off choice dialog in iPhone Glass style */}
+      {/* ── Pause Modal ── */}
       <Modal
         visible={disableModalVisible}
         transparent
@@ -238,7 +401,10 @@ export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
         onRequestClose={handleCancelDisable}
       >
         <View style={styles.modalOverlay}>
-          <View style={styles.modalGlassCard}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalIconBox}>
+              <Text style={styles.modalIconGlyph}>⏸</Text>
+            </View>
             <Text style={styles.modalTitle}>Pause this Nudgr?</Text>
             <Text style={styles.modalSubtitle}>
               Choose when this arrival alert should automatically resume:
@@ -249,13 +415,13 @@ export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
               onPress={() => handleConfirmDisable(NUDGE_DISABLE_MODE.TODAY)}
               activeOpacity={0.8}
             >
-              <View style={styles.modalOptionIconBox}>
-                <Text style={styles.modalOptionIcon}>☀️</Text>
+              <View style={[styles.modalOptionIcon, { backgroundColor: '#FFFBEB' }]}>
+                <Text style={styles.modalOptionIconGlyph}>◑</Text>
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.modalOptionTitle}>Today only</Text>
                 <Text style={styles.modalOptionDesc}>
-                  Paused for today. Resumes automatically tomorrow morning.
+                  Resumes automatically tomorrow morning.
                 </Text>
               </View>
             </TouchableOpacity>
@@ -265,13 +431,13 @@ export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
               onPress={() => handleConfirmDisable(NUDGE_DISABLE_MODE.MANUAL)}
               activeOpacity={0.8}
             >
-              <View style={styles.modalOptionIconBox}>
-                <Text style={styles.modalOptionIcon}>⏸️</Text>
+              <View style={[styles.modalOptionIcon, { backgroundColor: '#FEF2F2' }]}>
+                <Text style={styles.modalOptionIconGlyph}>◻</Text>
               </View>
               <View style={{ flex: 1 }}>
                 <Text style={styles.modalOptionTitle}>Until turned back on</Text>
                 <Text style={styles.modalOptionDesc}>
-                  Stays paused until you toggle the switch back ON.
+                  Stays paused until you toggle the switch ON.
                 </Text>
               </View>
             </TouchableOpacity>
@@ -293,18 +459,16 @@ export default function NudgeListScreen({ uid, onOpenNudge, onBack }) {
 const styles = StyleSheet.create({
   screen: {
     flex: 1,
-    backgroundColor: THEME.colors.bg,
+    backgroundColor: '#F6F7FC',
   },
   header: {
-    height: 54,
+    height: 60,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
-    paddingHorizontal: 12,
-    backgroundColor: 'rgba(7, 10, 18, 0.85)',
-    borderBottomWidth: 1,
-    borderBottomColor: THEME.colors.glassBorderSubtle,
-    zIndex: 10,
+    paddingHorizontal: 16,
+    zIndex: 20,
+    marginBottom: 4,
   },
   headerTitleContainer: {
     ...StyleSheet.absoluteFillObject,
@@ -312,9 +476,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   headerTitle: {
-    fontSize: 17,
+    fontSize: 18,
     fontWeight: '700',
-    color: THEME.colors.textPrimary,
+    color: '#0F172A',
     letterSpacing: -0.3,
   },
   backBtn: {
@@ -322,22 +486,28 @@ const styles = StyleSheet.create({
     height: 44,
     justifyContent: 'center',
     alignItems: 'center',
-    borderRadius: 14,
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    borderRadius: 16,
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: 'rgba(255, 255, 255, 0.95)',
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 8,
+    elevation: 3,
+    zIndex: 25,
   },
   backArrow: {
-    fontSize: 28,
-    color: THEME.colors.accentPrimary,
+    fontSize: 26,
+    color: '#0F172A',
     fontWeight: '300',
-    lineHeight: 30,
+    lineHeight: 28,
   },
-  container: {
-    flex: 1,
-  },
+  container: { flex: 1 },
   scrollContent: {
     paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 40,
+    paddingBottom: 48,
   },
   topSection: {
     marginBottom: 20,
@@ -345,45 +515,64 @@ const styles = StyleSheet.create({
   pageTitle: {
     fontSize: 28,
     fontWeight: '800',
-    color: THEME.colors.textPrimary,
+    color: '#0F172A',
     letterSpacing: -0.5,
   },
   pageSubtitle: {
     fontSize: 14,
-    color: THEME.colors.textSecondary,
+    color: '#64748B',
     marginTop: 4,
     lineHeight: 20,
   },
+  loadingContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    justifyContent: 'center',
+    paddingVertical: 28,
+  },
+  loadingText: {
+    fontSize: 14,
+    color: '#64748B',
+  },
   section: {
-    marginBottom: 22,
+    marginBottom: 20,
+  },
+  sectionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 12,
+  },
+  sectionDot: {
+    width: 4,
+    height: 14,
+    borderRadius: 2,
   },
   sectionHeader: {
     fontSize: 11,
-    fontWeight: '800',
-    color: THEME.colors.textTertiary,
-    letterSpacing: 1.2,
-    marginBottom: 12,
-    marginLeft: 4,
+    fontWeight: '700',
+    color: '#94A3B8',
+    letterSpacing: 1.1,
   },
-
-  // --- Floating Glass Tile ---
   tileCard: {
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: THEME.colors.glassBorder,
-    borderRadius: THEME.radius.card,
+    borderColor: 'rgba(255, 255, 255, 0.95)',
     padding: 18,
-    marginBottom: 14,
-    shadowColor: '#000',
+    shadowColor: '#64748B',
     shadowOffset: { width: 0, height: 6 },
-    shadowOpacity: 0.3,
-    shadowRadius: 12,
-    elevation: 4,
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
+    elevation: 3,
   },
   tileCardDisabled: {
-    backgroundColor: 'rgba(255, 255, 255, 0.03)',
-    borderColor: 'rgba(255, 255, 255, 0.06)',
-    opacity: 0.7,
+    backgroundColor: '#F8FAFC',
+    borderColor: '#E2E8F0',
+    opacity: 0.82,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   tileHeader: {
     flexDirection: 'row',
@@ -394,38 +583,45 @@ const styles = StyleSheet.create({
   personRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 10,
+    gap: 12,
     flex: 1,
   },
-  avatarDot: {
-    width: 34,
-    height: 34,
-    borderRadius: 12,
+  avatarCircle: {
+    width: 42,
+    height: 42,
+    borderRadius: 15,
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.12)',
   },
-  avatarDotText: {
-    fontSize: 14,
+  avatarInitial: {
+    fontSize: 17,
     fontWeight: '800',
-    color: '#ffffff',
   },
   personDirection: {
-    fontSize: 9,
-    fontWeight: '800',
-    color: THEME.colors.textTertiary,
-    letterSpacing: 1,
+    fontSize: 10,
+    fontWeight: '700',
+    color: '#94A3B8',
+    letterSpacing: 0.8,
+    marginBottom: 1,
   },
   personName: {
     fontSize: 16,
     fontWeight: '700',
-    color: THEME.colors.textPrimary,
+    color: '#0F172A',
     letterSpacing: -0.2,
+  },
+  alarmTitleText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#6366F1',
+    marginTop: 1,
+  },
+  textMuted: {
+    color: '#94A3B8',
   },
   switchWrapper: {
     alignItems: 'center',
-    justifyContent: 'center',
     paddingLeft: 8,
   },
   switchLabel: {
@@ -434,37 +630,30 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     marginBottom: 2,
   },
-  switchOn: {
-    color: THEME.colors.accentPrimary,
+  switchLabelOn: {
+    color: '#6366F1',
   },
-  switchOff: {
-    color: THEME.colors.textTertiary,
+  switchLabelOff: {
+    color: '#94A3B8',
   },
   switchStyle: {
     transform: Platform.OS === 'ios' ? [{ scaleX: 0.85 }, { scaleY: 0.85 }] : [{ scaleX: 1.05 }, { scaleY: 1.05 }],
   },
-
-  // --- Message ---
   messageBox: {
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
+    backgroundColor: '#F8FAFC',
     borderRadius: 14,
-    padding: 12,
+    padding: 13,
     marginBottom: 12,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.06)',
+    borderColor: '#E2E8F0',
   },
   messageText: {
     fontSize: 14,
-    fontWeight: '500',
-    color: 'rgba(255, 255, 255, 0.90)',
+    fontWeight: '400',
+    color: '#0F172A',
     lineHeight: 20,
     fontStyle: 'italic',
   },
-  textDisabled: {
-    color: THEME.colors.textTertiary,
-  },
-
-  // --- Footer tags ---
   tileFooter: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -477,177 +666,180 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: 6,
     flexWrap: 'wrap',
+    flex: 1,
   },
-  locationTag: {
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
+  tag: {
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(255, 255, 255, 0.08)',
+    borderColor: '#E2E8F0',
   },
-  locationTagText: {
+  tagPurple: {
+    backgroundColor: '#EEF2FF',
+    borderColor: '#C7D2FE',
+  },
+  tagTeal: {
+    backgroundColor: '#ECFDF5',
+    borderColor: 'rgba(167, 243, 208, 0.8)',
+  },
+  tagText: {
     fontSize: 11,
     fontWeight: '600',
-    color: THEME.colors.textSecondary,
+    color: '#64748B',
   },
-  scheduleTag: {
-    backgroundColor: 'rgba(139, 124, 255, 0.12)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
+  statusPill: {
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 10,
     borderWidth: 1,
-    borderColor: 'rgba(139, 124, 255, 0.25)',
   },
-  scheduleTagText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: THEME.colors.accentPrimary,
+  statusPillActive: {
+    backgroundColor: '#ECFDF5',
+    borderColor: 'rgba(167, 243, 208, 0.8)',
   },
-  voiceTag: {
-    backgroundColor: 'rgba(90, 200, 250, 0.12)',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: 'rgba(90, 200, 250, 0.25)',
+  statusPillPaused: {
+    backgroundColor: '#FFFBEB',
+    borderColor: 'rgba(253, 230, 138, 0.8)',
   },
-  voiceTagText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: THEME.colors.accentSecondary,
-  },
-  statusBadge: {
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 8,
-  },
-  badgeActive: {
-    backgroundColor: 'rgba(48, 209, 88, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(48, 209, 88, 0.3)',
-  },
-  badgePaused: {
-    backgroundColor: 'rgba(255, 69, 58, 0.15)',
-    borderWidth: 1,
-    borderColor: 'rgba(255, 69, 58, 0.3)',
-  },
-  statusBadgeText: {
+  statusPillText: {
     fontSize: 11,
     fontWeight: '700',
   },
-  badgeTextActive: {
-    color: '#86efac',
+  statusTextActive: {
+    color: '#059669',
   },
-  badgeTextPaused: {
-    color: '#fca5a5',
+  statusTextPaused: {
+    color: '#D97706',
   },
-
-  // --- Empty Card ---
   emptyCard: {
-    backgroundColor: THEME.colors.bgCard,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
     borderWidth: 1,
-    borderColor: THEME.colors.glassBorder,
-    borderRadius: THEME.radius.card,
+    borderColor: 'rgba(255, 255, 255, 0.95)',
     padding: 28,
     alignItems: 'center',
-    gap: 6,
+    shadowColor: '#64748B',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.06,
+    shadowRadius: 16,
+    elevation: 3,
   },
-  emptyIcon: {
-    fontSize: 28,
-    marginBottom: 4,
+  emptyIconBox: {
+    width: 56,
+    height: 56,
+    borderRadius: 20,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  emptyIconGlyph: {
+    fontSize: 24,
+    color: '#6366F1',
   },
   emptyTitle: {
-    fontSize: 16,
+    fontSize: 17,
     fontWeight: '700',
-    color: THEME.colors.textPrimary,
+    color: '#0F172A',
+    marginBottom: 4,
   },
   emptySubtext: {
     fontSize: 13,
-    color: THEME.colors.textSecondary,
+    color: '#64748B',
     textAlign: 'center',
     lineHeight: 18,
   },
-
-  // --- Modal Styles ---
   modalOverlay: {
     flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.75)',
+    backgroundColor: 'rgba(15, 23, 42, 0.45)',
     justifyContent: 'center',
     alignItems: 'center',
-    padding: 24,
+    padding: 20,
   },
-  modalGlassCard: {
-    width: '100%',
-    maxWidth: 380,
-    backgroundColor: '#0d111d',
-    borderRadius: THEME.radius.cardLg,
+  modalCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 28,
     borderWidth: 1,
-    borderColor: THEME.colors.glassBorderHighlight,
+    borderColor: 'rgba(255, 255, 255, 0.95)',
     padding: 24,
-    shadowColor: '#000',
+    width: '100%',
+    maxWidth: 360,
+    shadowColor: '#0F172A',
     shadowOffset: { width: 0, height: 12 },
-    shadowOpacity: 0.6,
-    shadowRadius: 24,
-    elevation: 15,
+    shadowOpacity: 0.15,
+    shadowRadius: 28,
+    elevation: 10,
+  },
+  modalIconBox: {
+    width: 48,
+    height: 48,
+    borderRadius: 16,
+    backgroundColor: '#EEF2FF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 14,
+    alignSelf: 'center',
+  },
+  modalIconGlyph: {
+    fontSize: 20,
+    color: '#6366F1',
   },
   modalTitle: {
     fontSize: 20,
     fontWeight: '800',
-    color: THEME.colors.textPrimary,
+    color: '#0F172A',
     textAlign: 'center',
     marginBottom: 6,
   },
   modalSubtitle: {
     fontSize: 13,
-    color: THEME.colors.textSecondary,
+    color: '#64748B',
     textAlign: 'center',
+    marginBottom: 18,
     lineHeight: 18,
-    marginBottom: 20,
   },
   modalOption: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: 'rgba(255, 255, 255, 0.05)',
+    gap: 12,
+    backgroundColor: '#F8FAFC',
     borderWidth: 1,
-    borderColor: THEME.colors.glassBorder,
+    borderColor: '#E2E8F0',
     borderRadius: 16,
     padding: 14,
     marginBottom: 10,
-    gap: 12,
   },
-  modalOptionIconBox: {
-    width: 38,
-    height: 38,
+  modalOptionIcon: {
+    width: 36,
+    height: 36,
     borderRadius: 12,
-    backgroundColor: 'rgba(255, 255, 255, 0.07)',
     alignItems: 'center',
     justifyContent: 'center',
   },
-  modalOptionIcon: {
-    fontSize: 18,
+  modalOptionIconGlyph: {
+    fontSize: 16,
+    color: '#0F172A',
   },
   modalOptionTitle: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
-    color: THEME.colors.textPrimary,
+    color: '#0F172A',
     marginBottom: 2,
   },
   modalOptionDesc: {
-    fontSize: 11,
-    color: THEME.colors.textSecondary,
-    lineHeight: 15,
+    fontSize: 12,
+    color: '#64748B',
   },
   modalCancel: {
-    paddingVertical: 13,
+    paddingVertical: 12,
     alignItems: 'center',
     marginTop: 6,
-    borderRadius: 14,
-    backgroundColor: 'rgba(255, 255, 255, 0.04)',
   },
   modalCancelText: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '700',
-    color: THEME.colors.textSecondary,
+    color: '#64748B',
   },
 });

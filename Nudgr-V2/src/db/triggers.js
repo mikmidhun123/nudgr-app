@@ -1,4 +1,12 @@
 import { getAuth, getFirestore, getServerTimestamp } from '../firebase';
+import { isNudgeActive } from './nudges';
+import {
+  scheduleAllows,
+  canTriggerByRepeatPolicy,
+  localDateKey,
+  localDayIndex,
+  REPEAT_MODE,
+} from '../location/geoUtils';
 
 /**
  * 64-bit FNV-1a pure JS hashing function.
@@ -33,29 +41,29 @@ export function triggerEventsRef(nudgeId) {
   return getFirestore().collection('nudges').doc(nudgeId).collection('triggerEvents');
 }
 
-export const TRIGGER_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes
+export const TRIGGER_COOLDOWN_MS = 30 * 60 * 1000; // 30 minutes default
 
 /**
  * Creates an idempotent trigger event document using Firestore transactions.
- * Enforces a strict 30-minute cooldown per Nudgr.
- * 
+ * Enforces repeat mode ('once', 'once_per_day', 'multiple_per_day') and cooldowns.
+ *
  * @param {string} nudgeId - The Nudgr document ID
- * @param {object} params - { recipientUid, triggerLatitude, triggerLongitude, triggeredAt }
- * @returns {Promise<{id: string, created: boolean, cooldown?: boolean}>}
+ * @param {object} params - { recipientUid, triggerLatitude, triggerLongitude, triggeredAt, observedAtMs }
+ * @returns {Promise<{id: string, created: boolean, cooldown?: boolean, expired?: boolean}>}
  */
 export async function createTriggerEvent(nudgeId, params = {}) {
-  let currentUid = params.senderUid || getAuth().currentUser?.uid;
-  if (!currentUid) {
-    try {
-      const AsyncStorage = require('@react-native-async-storage/async-storage').default;
-      currentUid = await AsyncStorage.getItem('nudgr_active_uid');
-    } catch (_) {}
-  }
+  const currentUid = getAuth().currentUser?.uid;
+  if (params.senderUid && params.senderUid !== currentUid) throw new Error('The signed-in account changed.');
   if (!currentUid) {
     throw new Error('You must be signed in to create a trigger event.');
   }
 
+  const observedAtMs = params.observedAtMs ?? Date.now();
+  if (!Number.isFinite(observedAtMs) || Date.now() - observedAtMs >= 300000 || observedAtMs - Date.now() > 30000) {
+    return { id: null, created: false, expired: true };
+  }
   const enterTime =
+    params.observedAtMs ??
     params.triggeredAt?.toMillis?.() ??
     (typeof params.triggeredAt === 'number' ? params.triggeredAt : Date.now());
   const triggerEventId = generateTriggerEventId(nudgeId, enterTime);
@@ -70,29 +78,52 @@ export async function createTriggerEvent(nudgeId, params = {}) {
 
   try {
     await db.runTransaction(async (transaction) => {
-      // 1. Check parent Nudgr document for cooldown
       const nudgeDoc = await transaction.get(nudgeRef);
-      if (!nudgeDoc.exists) {
+      if (!nudgeDoc.exists()) {
         created = false;
         return;
       }
 
       const nudgeData = nudgeDoc.data();
-      const lastTrigger =
-        nudgeData.lastTriggeredAt?.toMillis?.() ||
-        (typeof nudgeData.lastTriggeredAt === 'number' ? nudgeData.lastTriggeredAt : null) ||
-        nudgeData.triggeredAt?.toMillis?.() ||
-        (typeof nudgeData.triggeredAt === 'number' ? nudgeData.triggeredAt : null);
+      const repeatMode = nudgeData.repeatMode || REPEAT_MODE.ONCE;
+      const enterDate = new Date(enterTime);
 
-      if (lastTrigger && enterTime - lastTrigger < TRIGGER_COOLDOWN_MS) {
-        cooldownActive = true;
+      // Recheck live document: a cached ENTER can race a pause/cancel or schedule boundary.
+      if (
+        nudgeData.senderUid !== currentUid ||
+        !['active', 'scheduled'].includes(nudgeData.status) ||
+        !isNudgeActive(nudgeData, enterDate) ||
+        !scheduleAllows(nudgeData, enterDate) ||
+        (params.recipientUid && params.recipientUid !== nudgeData.recipientUid)
+      ) {
         created = false;
         return;
       }
 
-      // 2. Check if this exact trigger event ID already exists
+      // Check repeat policy & cooldown
+      if (typeof canTriggerByRepeatPolicy === 'function') {
+        if (!canTriggerByRepeatPolicy(nudgeData, enterDate, false)) {
+          cooldownActive = true;
+          created = false;
+          return;
+        }
+      } else {
+        const lastTrigger =
+          nudgeData.lastTriggeredAt?.toMillis?.() ||
+          (typeof nudgeData.lastTriggeredAt === 'number' ? nudgeData.lastTriggeredAt : null) ||
+          nudgeData.triggeredAt?.toMillis?.() ||
+          (typeof nudgeData.triggeredAt === 'number' ? nudgeData.triggeredAt : null);
+
+        if (lastTrigger && enterTime - lastTrigger < TRIGGER_COOLDOWN_MS) {
+          cooldownActive = true;
+          created = false;
+          return;
+        }
+      }
+
+      // Check if this exact trigger event ID already exists
       const existingDoc = await transaction.get(ref);
-      if (existingDoc.exists) {
+      if (existingDoc.exists()) {
         created = false;
         return;
       }
@@ -106,14 +137,27 @@ export async function createTriggerEvent(nudgeId, params = {}) {
         triggerLongitude: params.triggerLongitude,
         triggeredAt: params.triggeredAt ?? getServerTimestamp(),
         status: 'CREATED',
+        deliveryVersion: 2,
+        observedAtMs,
         createdAt: getServerTimestamp(),
         updatedAt: getServerTimestamp(),
       };
 
+      const todayStr = typeof localDateKey === 'function' ? localDateKey(enterDate) : null;
+      const dayIdx =
+        typeof localDayIndex === 'function'
+          ? localDayIndex(enterTime, nudgeData.timezoneOffsetMinutes)
+          : null;
+
       transaction.set(ref, triggerData);
       transaction.update(nudgeRef, {
-        status: 'triggered',
+        status: repeatMode === REPEAT_MODE.ONCE ? 'triggered' : 'active',
         lastTriggeredAt: getServerTimestamp(),
+        lastTriggerEventId: triggerEventId,
+        lastTriggerExpiresAtMs: observedAtMs + 300000,
+        ...(todayStr ? { lastTriggeredDate: todayStr } : {}),
+        ...(typeof dayIdx === 'number' ? { lastTriggeredDayIndex: dayIdx } : {}),
+        ...(nudgeData.recipientHidden ? { recipientHidden: false } : {}),
         triggeredAt: nudgeData.triggeredAt || getServerTimestamp(),
         updatedAt: getServerTimestamp(),
       });
@@ -121,9 +165,9 @@ export async function createTriggerEvent(nudgeId, params = {}) {
       created = true;
     });
 
-    console.log(`[FIREBASE_DIAG]\noperation result = ${created ? 'SUCCESS (status: triggered)' : (cooldownActive ? 'SKIPPED (cooldown active)' : 'ALREADY_EXISTS')}\nerror if any = NONE`);
+    console.log(`[FIREBASE_DIAG]\noperation result = ${created ? 'SUCCESS' : (cooldownActive ? 'SKIPPED (cooldown/repeat active)' : 'ALREADY_EXISTS')}\nerror if any = NONE`);
     if (created) {
-      console.log(`[DELIVERY_TRACE] sender trigger\n→ data written/sent: document nudges/${nudgeId} updated to status=triggered, triggerEvent created\n→ recipient: ${params.recipientUid || 'unknown'}`);
+      console.log(`[DELIVERY_TRACE] sender trigger\n→ data written/sent: document nudges/${nudgeId} updated, triggerEvent created\n→ recipient: ${params.recipientUid || 'unknown'}`);
     }
     return { id: triggerEventId, created, cooldown: cooldownActive };
   } catch (err) {
@@ -137,7 +181,13 @@ export async function createTriggerEvent(nudgeId, params = {}) {
  */
 export async function getTriggerEvent(nudgeId, triggerEventId) {
   const snap = await triggerEventsRef(nudgeId).doc(triggerEventId).get();
-  return snap.exists ? { id: snap.id, ...snap.data() } : null;
+  return snap.exists() ? { id: snap.id, ...snap.data() } : null;
+}
+
+export async function getLatestTriggerEvent(nudgeId) {
+  const snapshot = await triggerEventsRef(nudgeId).orderBy('createdAt', 'desc').limit(1).get();
+  const latest = snapshot.docs[0];
+  return latest ? { id: latest.id, ...latest.data() } : null;
 }
 
 /**
@@ -156,8 +206,9 @@ export async function updateTriggerEventStatus(nudgeId, triggerEventId, status) 
 export function subscribeTriggerEvents(nudgeId, onChange, onError) {
   return triggerEventsRef(nudgeId)
     .orderBy('triggeredAt', 'desc')
+    .limit(10)
     .onSnapshot(
-      (snap) => onChange(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      (snap) => onChange(snap.docs.map((d) => ({ id: d.id, ...d.data() }))),
       (e) => onError && onError(e)
     );
 }
